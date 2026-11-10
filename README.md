@@ -15,6 +15,7 @@ Lecteur IPTV pour Android (téléphone, tablette et Android TV) compatible avec 
 - **Lecteur ExoPlayer** : HLS, MPEG-TS, MP4, MKV ; pistes audio et sous-titres ; repli automatique `.ts` → `.m3u8`
 - **Zapping** : boutons suivant/précédent, touches CH+/CH- et « dernière chaîne » de la télécommande
 - **Picture-in-Picture** avec commandes lecture/pause et chaîne suivante/précédente
+- **Chromecast** : envoi de la lecture vers la TV (récepteur Google par défaut) et retour sur le téléphone à la même position
 
 ## Stack
 

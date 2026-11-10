@@ -9,3 +9,6 @@
 -keepclasseswithmembers class fr.pelis.iptv.data.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
+
+# Google Cast : classe déclarée par son nom dans le manifeste
+-keep class fr.pelis.iptv.cast.CastOptionsProvider { *; }

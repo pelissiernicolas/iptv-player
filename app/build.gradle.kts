@@ -11,8 +11,8 @@ android {
     applicationId = "fr.pelis.iptv"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0.0"
+    versionCode = 2
+    versionName = "1.1.0"
   }
 
   buildTypes {
@@ -75,6 +75,7 @@ dependencies {
   implementation(libs.androidx.media3.exoplayer.dash)
   implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.media3.common)
+  implementation(libs.androidx.media3.cast) // Chromecast (Google Cast)
 
   // Networking & Image loading
   implementation(libs.okhttp)

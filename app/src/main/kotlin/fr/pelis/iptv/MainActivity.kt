@@ -1,7 +1,7 @@
 package fr.pelis.iptv
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -19,7 +19,8 @@ import fr.pelis.iptv.ui.ProfileEditScreen
 import fr.pelis.iptv.ui.ProfilesScreen
 import fr.pelis.iptv.ui.SeriesScreen
 
-class MainActivity : ComponentActivity() {
+// FragmentActivity : requis par le bouton Cast (boîte de dialogue de choix d'appareil).
+class MainActivity : FragmentActivity() {
     private val vm: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {

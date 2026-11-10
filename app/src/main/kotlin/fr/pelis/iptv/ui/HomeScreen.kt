@@ -160,6 +160,7 @@ fun HomeScreen(vm: MainViewModel) {
                         if (!home) {
                             IconButton(onClick = { searchOpen = true }) { Icon(Icons.Filled.Search, "Rechercher") }
                         }
+                        CastButton()
                         IconButton(onClick = { showAccount = true }) { Icon(Icons.Filled.AccountCircle, "Compte") }
                     }
                 },
