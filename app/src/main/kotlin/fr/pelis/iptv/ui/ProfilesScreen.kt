@@ -15,7 +15,13 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -70,8 +76,17 @@ fun ProfileAvatar(profile: Profile, size: Int = 48) {
 @Composable
 fun ProfilesScreen(vm: MainViewModel) {
     var toDelete by remember { mutableStateOf<Profile?>(null) }
+    val firstFocus = remember { FocusRequester() }
+    if (LocalTvMode.current) LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
 
     Box(Modifier.fillMaxSize().systemBarsPadding()) {
+        // Changer le type d'appareil (Téléviseur / Smartphone)
+        IconButton(
+            onClick = vm::openDeviceSetup,
+            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp).tvItem(CircleShape),
+        ) {
+            Icon(if (vm.tvMode) Icons.Filled.Tv else Icons.Filled.Smartphone, "Type d'appareil")
+        }
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 32.dp, bottom = 100.dp),
@@ -85,10 +100,14 @@ fun ProfilesScreen(vm: MainViewModel) {
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
             }
-            items(vm.profiles, key = { it.id }) { profile ->
+            itemsIndexed(vm.profiles, key = { _, it -> it.id }) { index, profile ->
                 Card(
                     onClick = { vm.openProfile(profile) },
-                    modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(),
+                    modifier = Modifier
+                        .widthIn(max = 560.dp)
+                        .fillMaxWidth()
+                        .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier)
+                        .tvItem(RoundedCornerShape(12.dp)),
                 ) {
                     Row(
                         Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
@@ -106,10 +125,10 @@ fun ProfilesScreen(vm: MainViewModel) {
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        IconButton(onClick = { vm.editProfile(profile) }) {
+                        IconButton(onClick = { vm.editProfile(profile) }, modifier = Modifier.tvItem(CircleShape)) {
                             Icon(Icons.Filled.Edit, "Modifier")
                         }
-                        IconButton(onClick = { toDelete = profile }) {
+                        IconButton(onClick = { toDelete = profile }, modifier = Modifier.tvItem(CircleShape)) {
                             Icon(Icons.Filled.Delete, "Supprimer")
                         }
                     }
@@ -121,7 +140,7 @@ fun ProfilesScreen(vm: MainViewModel) {
             onClick = vm::addProfile,
             icon = { Icon(Icons.Filled.Add, null) },
             text = { Text("Ajouter un profil") },
-            modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp).tvItem(RoundedCornerShape(16.dp)),
         )
     }
 

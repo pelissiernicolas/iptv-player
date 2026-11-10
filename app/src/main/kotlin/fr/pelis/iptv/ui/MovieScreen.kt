@@ -17,7 +17,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -62,16 +67,21 @@ fun MovieScreen(vm: MainViewModel, entry: MediaEntry) {
     val isFavorite = entry.id in vm.favorites[ContentType.VOD].orEmpty()
     val progress = Library.progressFor("vod:${entry.id}")
     val extension = detail?.extension ?: entry.extension
+    // Télécommande : focus direct sur « Lecture ».
+    val playFocus = remember { FocusRequester() }
+    if (LocalTvMode.current) LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
-                    IconButton(onClick = vm::closeMovie) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Retour") }
+                    IconButton(onClick = vm::closeMovie, modifier = Modifier.tvItem(CircleShape)) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Retour")
+                    }
                 },
                 actions = {
-                    IconButton(onClick = { vm.toggleFavorite(entry) }) {
+                    IconButton(onClick = { vm.toggleFavorite(entry) }, modifier = Modifier.tvItem(CircleShape)) {
                         Icon(
                             if (isFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
                             contentDescription = if (isFavorite) "Retirer des favoris" else "Ajouter aux favoris",
@@ -146,22 +156,31 @@ fun MovieScreen(vm: MainViewModel, entry: MediaEntry) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (progress != null) {
-                    Button(onClick = { vm.playVod(context, entry, extension, progress.position) }) {
+                    Button(
+                        onClick = { vm.playVod(context, entry, extension, progress.position) },
+                        modifier = Modifier.focusRequester(playFocus).tvItem(CircleShape),
+                    ) {
                         Icon(Icons.Filled.PlayArrow, null)
                         Text("  Reprendre à ${formatDuration(progress.position)}")
                     }
-                    OutlinedButton(onClick = { vm.playVod(context, entry, extension) }) {
+                    OutlinedButton(
+                        onClick = { vm.playVod(context, entry, extension) },
+                        modifier = Modifier.tvItem(CircleShape),
+                    ) {
                         Icon(Icons.Filled.Replay, null)
                         Text("  Depuis le début")
                     }
                 } else {
-                    Button(onClick = { vm.playVod(context, entry, extension) }) {
+                    Button(
+                        onClick = { vm.playVod(context, entry, extension) },
+                        modifier = Modifier.focusRequester(playFocus).tvItem(CircleShape),
+                    ) {
                         Icon(Icons.Filled.PlayArrow, null)
                         Text("  Lecture")
                     }
                 }
                 detail?.trailerYoutubeId?.let { id ->
-                    OutlinedButton(onClick = {
+                    OutlinedButton(modifier = Modifier.tvItem(CircleShape), onClick = {
                         runCatching {
                             context.startActivity(
                                 Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$id")),

@@ -24,6 +24,11 @@ class SessionStore(context: Context) {
         get() = prefs.getString(KEY_ACTIVE, null)
         set(value) = prefs.edit().putString(KEY_ACTIVE, value).apply()
 
+    /** Type d'appareil choisi au premier démarrage : "tv", "mobile", ou null si pas encore choisi. */
+    var deviceMode: String?
+        get() = prefs.getString(KEY_DEVICE_MODE, null)
+        set(value) = prefs.edit().putString(KEY_DEVICE_MODE, value).apply()
+
     fun favorites(profileId: String, type: ContentType): Set<String> =
         prefs.getStringSet(favKey(profileId, type), emptySet())?.toSet() ?: emptySet()
 
@@ -62,5 +67,6 @@ class SessionStore(context: Context) {
     private companion object {
         const val KEY_PROFILES = "profiles"
         const val KEY_ACTIVE = "active_profile"
+        const val KEY_DEVICE_MODE = "device_mode"
     }
 }

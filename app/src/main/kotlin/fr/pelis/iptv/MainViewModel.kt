@@ -24,6 +24,7 @@ import fr.pelis.iptv.data.XtreamClient
 import fr.pelis.iptv.data.XtreamException
 import fr.pelis.iptv.player.PlayItem
 import fr.pelis.iptv.player.PlaylistHolder
+import fr.pelis.iptv.ui.isTvDevice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -41,7 +42,12 @@ sealed interface Screen {
     data class Series(val entry: MediaEntry) : Screen
     data class Movie(val entry: MediaEntry) : Screen
     data object Guide : Screen
+    /** Choix Téléviseur / Smartphone-tablette ([firstLaunch] = premier démarrage). */
+    data class DeviceSetup(val firstLaunch: Boolean) : Screen
 }
+
+const val DEVICE_TV = "tv"
+const val DEVICE_MOBILE = "mobile"
 
 data class TabState(
     val categories: List<Category> = emptyList(),
@@ -108,14 +114,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var seriesJob: Job? = null
     private var accountJob: Job? = null
 
+    // Type d'appareil
+    /** Mode Téléviseur : navigation à la télécommande. */
+    var tvMode by mutableStateOf(store.deviceMode == DEVICE_TV); private set
+    /** Type d'appareil détecté automatiquement (proposé par défaut au premier démarrage). */
+    val detectedTv: Boolean = isTvDevice(app)
+    private var screenBeforeSetup: Screen? = null
+
     init {
         Library.init(app)
+        if (store.deviceMode == null) {
+            // Premier démarrage : on demande d'abord le type d'appareil.
+            screen = Screen.DeviceSetup(firstLaunch = true)
+        } else {
+            startFlow()
+        }
+    }
+
+    /** Ouvre le profil actif, sinon le choix / la création de profil. */
+    private fun startFlow() {
         val active = store.activeProfileId?.let { id -> profiles.find { it.id == id } }
         when {
             active != null -> openProfile(active)
             profiles.isEmpty() -> screen = Screen.EditProfile(null)
             else -> screen = Screen.Profiles
         }
+    }
+
+    // ---------- Type d'appareil ----------
+
+    fun chooseDeviceMode(tv: Boolean) {
+        val first = (screen as? Screen.DeviceSetup)?.firstLaunch == true
+        store.deviceMode = if (tv) DEVICE_TV else DEVICE_MOBILE
+        tvMode = tv
+        if (first) startFlow() else screen = screenBeforeSetup ?: Screen.Profiles
+        screenBeforeSetup = null
+    }
+
+    /** Permet de changer de type d'appareil plus tard. */
+    fun openDeviceSetup() {
+        screenBeforeSetup = screen
+        screen = Screen.DeviceSetup(firstLaunch = false)
+    }
+
+    fun cancelDeviceSetup() {
+        screen = screenBeforeSetup ?: Screen.Profiles
+        screenBeforeSetup = null
     }
 
     // ---------- Profils ----------

@@ -55,7 +55,9 @@ import androidx.media3.cast.CastPlayer
 import androidx.media3.cast.SessionAvailabilityListener
 import fr.pelis.iptv.R
 import fr.pelis.iptv.cast.CastSupport
+import fr.pelis.iptv.DEVICE_TV
 import fr.pelis.iptv.data.Library
+import fr.pelis.iptv.data.SessionStore
 import fr.pelis.iptv.data.RecentChannel
 import fr.pelis.iptv.data.WatchProgress
 import fr.pelis.iptv.data.XtreamClient
@@ -116,9 +118,15 @@ class PlayerActivity : FragmentActivity() {
     }
     private var inPip = false
 
+    /** Mode Téléviseur choisi au premier démarrage : pas de PiP ni de Cast, zapping haut/bas. */
+    private var tvMode = false
+    private lateinit var zapOverlay: TextView
+    private val hideZapOverlay = Runnable { zapOverlay.visibility = View.GONE }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Library.init(this)
+        tvMode = SessionStore(this).deviceMode == DEVICE_TV
         if (!loadPlaylist()) {
             finish()
             return
@@ -151,8 +159,8 @@ class PlayerActivity : FragmentActivity() {
                 setOnClickListener { goToPreviousChannel() }
             }
             addView(lastChannelButton)
-            CastSupport.createButton(this@PlayerActivity)?.let { addView(it) }
-            if (pipSupported) {
+            if (!tvMode) CastSupport.createButton(this@PlayerActivity)?.let { addView(it) }
+            if (pipSupported && !tvMode) {
                 addView(ImageButton(this@PlayerActivity).apply {
                     setImageResource(R.drawable.ic_pip)
                     setBackgroundColor(Color.TRANSPARENT)
@@ -183,10 +191,22 @@ class PlayerActivity : FragmentActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER,
             )
         }
+        zapOverlay = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 22f
+            setBackgroundColor(0xB0000000.toInt())
+            setPadding(48, 24, 48, 24)
+            visibility = View.GONE
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.START,
+            ).apply { setMargins(64, 0, 0, 64) }
+        }
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(playerView)
             addView(castBanner)
+            addView(zapOverlay)
             addView(topBar)
         })
         hideSystemUi()
@@ -267,7 +287,7 @@ class PlayerActivity : FragmentActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         // Android 8 à 11 : on bascule en PiP en quittant l'appli (Android 12+ le fait via setAutoEnterEnabled).
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && !casting && player?.isPlaying == true) enterPip()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && !tvMode && !casting && player?.isPlaying == true) enterPip()
     }
 
     // ---------- Lecteur ----------
@@ -471,9 +491,18 @@ class PlayerActivity : FragmentActivity() {
         updateTitle()
         updateLastChannelButton()
         val item = items.getOrNull(index) ?: return
+        if (tvMode && item.isLive && !playerView.isControllerFullyVisible) showZapOverlay(index)
         if (item.isLive && item.contentId != null) {
             Library.addRecentChannel(RecentChannel(item.contentId, item.title, item.image, item.epgId))
         }
+    }
+
+    /** Bandeau « numéro + nom de chaîne » affiché 3 s après un changement de chaîne. */
+    private fun showZapOverlay(index: Int) {
+        zapOverlay.text = "${index + 1}  ${items[index].title}"
+        zapOverlay.visibility = View.VISIBLE
+        handler.removeCallbacks(hideZapOverlay)
+        handler.postDelayed(hideZapOverlay, 3_000)
     }
 
     private fun updateLastChannelButton() {
@@ -514,12 +543,12 @@ class PlayerActivity : FragmentActivity() {
     // ---------- Picture-in-Picture ----------
 
     private fun enterPip() {
-        if (!pipSupported || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (tvMode || !pipSupported || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         runCatching { enterPictureInPictureMode(buildPipParams()) }
     }
 
     private fun updatePipParams() {
-        if (!pipSupported || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (tvMode || !pipSupported || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         runCatching { setPictureInPictureParams(buildPipParams()) }
     }
 
@@ -597,6 +626,19 @@ class PlayerActivity : FragmentActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val p = active
         if (p != null && event.action == KeyEvent.ACTION_DOWN) {
+            val live = items.firstOrNull()?.isLive == true
+            if (tvMode && live && !playerView.isControllerFullyVisible) {
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        currentIndex.takeIf { it >= 0 }?.let { seekToItem(it + 1) }
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        currentIndex.takeIf { it >= 0 }?.let { seekToItem(it - 1) }
+                        return true
+                    }
+                }
+            }
             when (event.keyCode) {
                 KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_UP -> {
                     if (p.hasNextMediaItem()) p.seekToNextMediaItem()

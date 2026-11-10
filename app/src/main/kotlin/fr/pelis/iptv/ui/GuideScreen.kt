@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -96,7 +97,9 @@ fun GuideScreen(vm: MainViewModel) {
             TopAppBar(
                 title = { Text("Guide TV · ${vm.guideTitle}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
-                    IconButton(onClick = vm::closeGuide) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Retour") }
+                    IconButton(onClick = vm::closeGuide, modifier = Modifier.tvItem(CircleShape)) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Retour")
+                    }
                 },
             )
         },
@@ -124,7 +127,7 @@ fun GuideScreen(vm: MainViewModel) {
                 itemsIndexed(channels) { index, channel ->
                     LaunchedEffect(channel.id) { vm.loadEpg(channel) }
                     Row(Modifier.fillMaxWidth().height(ROW_HEIGHT)) {
-                        ChannelCell(channel, Modifier.clickable { vm.playLive(context, channels, index) })
+                        ChannelCell(channel, Modifier.tvItem().clickable { vm.playLive(context, channels, index) })
                         TimeLine(hScroll, Modifier.weight(1f)) {
                             val programs = vm.epg[channel.id]
                             when {
@@ -141,6 +144,7 @@ fun GuideScreen(vm: MainViewModel) {
                                             .width(minutesToDp(end - start))
                                             .fillMaxHeight()
                                             .padding(2.dp)
+                                            .tvItem(RoundedCornerShape(6.dp))
                                             .clip(RoundedCornerShape(6.dp))
                                             .background(
                                                 if (live) MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -56,7 +57,7 @@ fun SeriesScreen(vm: MainViewModel, entry: MediaEntry) {
             TopAppBar(
                 title = { Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
-                    IconButton(onClick = vm::closeSeries) {
+                    IconButton(onClick = vm::closeSeries, modifier = Modifier.tvItem(CircleShape)) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Retour")
                     }
                 },
@@ -133,7 +134,12 @@ private fun SeriesContent(detail: SeriesDetail, entry: MediaEntry, onPlay: (seas
                     edgePadding = 12.dp,
                 ) {
                     seasons.forEach { s ->
-                        Tab(selected = s == selected, onClick = { selected = s }, text = { Text("Saison $s") })
+                        Tab(
+                            selected = s == selected,
+                            onClick = { selected = s },
+                            text = { Text("Saison $s") },
+                            modifier = Modifier.tvItem(),
+                        )
                     }
                 }
             }
@@ -160,7 +166,7 @@ private fun SeriesContent(detail: SeriesDetail, entry: MediaEntry, onPlay: (seas
                         }
                     },
                     leadingContent = { Icon(Icons.Filled.PlayArrow, null, tint = MaterialTheme.colorScheme.primary) },
-                    modifier = Modifier.clickable { onPlay(selected, index) },
+                    modifier = Modifier.tvItem().clickable { onPlay(selected, index) },
                 )
             }
         }

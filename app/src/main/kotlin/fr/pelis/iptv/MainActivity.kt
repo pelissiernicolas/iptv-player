@@ -11,7 +11,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.CompositionLocalProvider
+import fr.pelis.iptv.ui.DeviceSetupScreen
 import fr.pelis.iptv.ui.GuideScreen
+import fr.pelis.iptv.ui.LocalTvMode
 import fr.pelis.iptv.ui.HomeScreen
 import fr.pelis.iptv.ui.IptvTheme
 import fr.pelis.iptv.ui.MovieScreen
@@ -34,8 +37,10 @@ class MainActivity : FragmentActivity() {
 private fun App(vm: MainViewModel) {
     // Conserve la position de défilement de l'accueil quand on ouvre une fiche puis revient.
     val stateHolder = rememberSaveableStateHolder()
+    CompositionLocalProvider(LocalTvMode provides vm.tvMode) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when (val s = vm.screen) {
+            is Screen.DeviceSetup -> DeviceSetupScreen(vm, s.firstLaunch)
             Screen.Profiles -> ProfilesScreen(vm)
             is Screen.EditProfile -> ProfileEditScreen(vm, s.profile)
             Screen.Home -> stateHolder.SaveableStateProvider("home") { HomeScreen(vm) }
@@ -43,5 +48,6 @@ private fun App(vm: MainViewModel) {
             is Screen.Movie -> MovieScreen(vm, s.entry)
             Screen.Guide -> GuideScreen(vm)
         }
+    }
     }
 }

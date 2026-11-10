@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -48,6 +49,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -125,6 +128,10 @@ fun HomeScreen(vm: MainViewModel) {
         else -> state.items
     }
     val home = vm.homeSelected
+    val tv = vm.tvMode
+    val navFocus = remember { FocusRequester() }
+    // Télécommande : focus initial sur le menu latéral pour pouvoir naviguer tout de suite.
+    if (tv) LaunchedEffect(Unit) { runCatching { navFocus.requestFocus() } }
     val loading = if (searchMode) vm.searching || vm.searchResults == null else state.loading
 
     Scaffold(
@@ -149,25 +156,34 @@ fun HomeScreen(vm: MainViewModel) {
                 },
                 actions = {
                     if (searchOpen && !home) {
-                        IconButton(onClick = closeSearch) { Icon(Icons.Filled.Close, "Fermer la recherche") }
+                        IconButton(onClick = closeSearch, modifier = Modifier.tvItem(CircleShape)) {
+                            Icon(Icons.Filled.Close, "Fermer la recherche")
+                        }
                     } else {
                         if (!home && type == ContentType.LIVE && items.isNotEmpty()) {
-                            IconButton(onClick = {
-                                val title = if (searchMode) "Recherche" else categoryName(state)
-                                vm.openGuide(items, title)
-                            }) { Icon(Icons.Filled.CalendarMonth, "Guide TV") }
+                            IconButton(
+                                onClick = {
+                                    val title = if (searchMode) "Recherche" else categoryName(state)
+                                    vm.openGuide(items, title)
+                                },
+                                modifier = Modifier.tvItem(CircleShape),
+                            ) { Icon(Icons.Filled.CalendarMonth, "Guide TV") }
                         }
                         if (!home) {
-                            IconButton(onClick = { searchOpen = true }) { Icon(Icons.Filled.Search, "Rechercher") }
+                            IconButton(onClick = { searchOpen = true }, modifier = Modifier.tvItem(CircleShape)) {
+                                Icon(Icons.Filled.Search, "Rechercher")
+                            }
                         }
-                        CastButton()
-                        IconButton(onClick = { showAccount = true }) { Icon(Icons.Filled.AccountCircle, "Compte") }
+                        if (!tv) CastButton()
+                        IconButton(onClick = { showAccount = true }, modifier = Modifier.tvItem(CircleShape)) {
+                            Icon(Icons.Filled.AccountCircle, "Compte")
+                        }
                     }
                 },
             )
         },
         bottomBar = {
-            NavigationBar {
+            if (!tv) NavigationBar {
                 NavigationBarItem(
                     selected = home,
                     onClick = { searchOpen = false; vm.selectHome() },
@@ -185,11 +201,35 @@ fun HomeScreen(vm: MainViewModel) {
             }
         },
     ) { padding ->
-        if (home) {
-            HomeTab(vm, Modifier.padding(padding))
-            return@Scaffold
+        Row(Modifier.padding(padding).fillMaxSize()) {
+        if (tv) {
+            NavigationRail {
+                Spacer(Modifier.height(8.dp))
+                NavigationRailItem(
+                    selected = home,
+                    onClick = { searchOpen = false; vm.selectHome() },
+                    icon = { Icon(Icons.Filled.Home, contentDescription = null) },
+                    label = { Text("Accueil") },
+                    modifier = Modifier
+                        .then(if (home) Modifier.focusRequester(navFocus) else Modifier)
+                        .tvItem(RoundedCornerShape(16.dp)),
+                )
+                ContentType.entries.forEach { t ->
+                    NavigationRailItem(
+                        selected = !home && t == type,
+                        onClick = { vm.selectTab(t) },
+                        icon = { Icon(t.icon, contentDescription = null) },
+                        label = { Text(t.label) },
+                        modifier = Modifier
+                            .then(if (!home && t == type) Modifier.focusRequester(navFocus) else Modifier)
+                            .tvItem(RoundedCornerShape(16.dp)),
+                    )
+                }
+            }
         }
-        Column(Modifier.padding(padding).fillMaxSize()) {
+        if (home) {
+            HomeTab(vm, Modifier.weight(1f))
+        } else Column(Modifier.weight(1f).fillMaxSize()) {
             if (!searchMode && state.selected != null) {
                 CategoryChips(
                     state,
@@ -209,7 +249,9 @@ fun HomeScreen(vm: MainViewModel) {
                         Text(
                             when {
                                 searchMode -> "Aucun résultat"
-                                state.selected == CATEGORY_FAV -> "Aucun favori.\nAppui long sur un élément pour l'ajouter."
+                                state.selected == CATEGORY_FAV -> "Aucun favori.\n" +
+                                    if (tv) "Appui long sur OK (ou touche Menu) sur un élément pour l'ajouter."
+                                    else "Appui long sur un élément pour l'ajouter."
                                 else -> "Aucun contenu dans cette catégorie"
                             },
                             Modifier.align(Alignment.Center).padding(24.dp),
@@ -230,6 +272,7 @@ fun HomeScreen(vm: MainViewModel) {
                 }
             }
         }
+        }
     }
 
     if (showAccount) {
@@ -237,6 +280,8 @@ fun HomeScreen(vm: MainViewModel) {
             account = vm.account,
             server = vm.serverUrl,
             onSwitchProfile = { showAccount = false; vm.switchProfile() },
+            tvMode = tv,
+            onChangeDevice = { showAccount = false; vm.openDeviceSetup() },
             onDismiss = { showAccount = false },
         )
     }
@@ -281,6 +326,7 @@ private fun CategoryChips(state: TabState, hasFavorites: Boolean, hasRecent: Boo
     ) {
         items(entries) { (id, name) ->
             FilterChip(
+                modifier = Modifier.tvItem(),
                 selected = id == state.selected,
                 onClick = { onSelect(id) },
                 label = { Text(name, maxLines = 1) },
@@ -306,6 +352,7 @@ private fun ChannelList(
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .tvItem(onLongPress = { onLongClick(entry) })
                     .combinedClickable(onClick = { onClick(index) }, onLongClick = { onLongClick(entry) })
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -346,7 +393,7 @@ private fun PosterGrid(
     onLongClick: (MediaEntry) -> Unit,
 ) {
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(112.dp),
+        columns = GridCells.Adaptive(if (LocalTvMode.current) 140.dp else 112.dp),
         contentPadding = PaddingValues(12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -354,6 +401,7 @@ private fun PosterGrid(
         itemsIndexed(items) { _, entry ->
             Column(
                 Modifier
+                    .tvItem(onLongPress = { onLongClick(entry) })
                     .clip(RoundedCornerShape(8.dp))
                     .combinedClickable(onClick = { onClick(entry) }, onLongClick = { onLongClick(entry) }),
             ) {
@@ -408,6 +456,8 @@ private fun AccountDialog(
     account: AccountInfo?,
     server: String?,
     onSwitchProfile: () -> Unit,
+    tvMode: Boolean,
+    onChangeDevice: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -427,6 +477,10 @@ private fun AccountDialog(
                     InfoRow("Connexions", "${account.activeConnections ?: "?"} / ${account.maxConnections ?: "?"}")
                 }
                 server?.let { InfoRow("Serveur", it) }
+                InfoRow("Appareil", if (tvMode) "Téléviseur" else "Smartphone / tablette")
+                TextButton(onClick = onChangeDevice, contentPadding = PaddingValues(0.dp)) {
+                    Text("Changer le type d'appareil")
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Fermer") } },
@@ -516,6 +570,7 @@ private fun HomeTab(vm: MainViewModel, modifier: Modifier) {
                         Column(
                             Modifier
                                 .width(124.dp)
+                                .tvItem(onLongPress = { Library.removeProgress(p.key) })
                                 .clip(RoundedCornerShape(8.dp))
                                 .combinedClickable(
                                     onClick = { vm.resume(context, p) },
@@ -563,7 +618,7 @@ private fun HomeTab(vm: MainViewModel, modifier: Modifier) {
             }
             item {
                 Text(
-                    "Appui long pour retirer de la liste",
+                    if (LocalTvMode.current) "Appui long sur OK pour retirer de la liste" else "Appui long pour retirer de la liste",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
@@ -577,6 +632,7 @@ private fun HomeTab(vm: MainViewModel, modifier: Modifier) {
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .tvItem()
                         .combinedClickable(onClick = { vm.playLive(context, recents, index) })
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
