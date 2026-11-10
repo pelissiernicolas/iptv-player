@@ -56,7 +56,7 @@ object CastSupport {
      */
     fun createButton(context: Context): MediaRouteButton? {
         if (context(context) == null) return null
-        val themed = ContextThemeWrapper(context, R.style.Theme_IPTV_Cast)
+        val themed = ContextThemeWrapper(context, R.style.Theme_IPTV)
         return MediaRouteButton(themed).also { CastButtonFactory.setUpMediaRouteButton(themed, it) }
     }
 }

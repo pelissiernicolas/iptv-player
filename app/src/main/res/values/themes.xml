@@ -2,13 +2,15 @@
     <color name="brand">#FF0B1A2E</color>
     <color name="accent">#FF29B6F6</color>
 
-    <!-- Thème du bouton Cast et de sa boîte de dialogue de choix d'appareil (AppCompat requis). -->
-    <style name="Theme.IPTV.Cast" parent="Theme.AppCompat.NoActionBar">
+    <!--
+        Thème de l'application, basé sur AppCompat : la boîte de dialogue Cast (choix de l'appareil)
+        utilise le thème de l'écran et plante si colorPrimary n'est pas défini.
+        L'interface elle-même est en Jetpack Compose (Material 3) et n'utilise pas ces couleurs.
+    -->
+    <style name="Theme.IPTV" parent="Theme.AppCompat.NoActionBar">
         <item name="colorPrimary">@color/brand</item>
+        <item name="colorPrimaryDark">@color/brand</item>
         <item name="colorAccent">@color/accent</item>
-    </style>
-
-    <style name="Theme.IPTV" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
