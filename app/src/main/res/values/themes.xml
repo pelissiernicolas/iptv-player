@@ -1,0 +1,10 @@
+<resources>
+    <color name="brand">#FF0B1A2E</color>
+    <color name="accent">#FF29B6F6</color>
+
+    <style name="Theme.IPTV" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
