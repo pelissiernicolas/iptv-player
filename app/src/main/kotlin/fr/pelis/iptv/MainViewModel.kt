@@ -233,6 +233,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         updateError = null
     }
 
+    /** Résumé court (le message doit tenir sur deux lignes, même sur un petit écran). */
+    private fun backupSummary(favoriteCount: Int, backup: Backup) =
+        "$favoriteCount favoris, ${backup.progress.size} en cours, ${backup.recentChannels.size} chaînes"
+
     /** Nom proposé pour le fichier de sauvegarde. */
     fun backupFileName(): String {
         val date = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.FRANCE).format(java.util.Date())
@@ -263,8 +267,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             toast(
                 if (result.isSuccess) {
-                    "Sauvegarde enregistrée : ${backup.favorites.count} favori(s), " +
-                        "${backup.progress.size} lecture(s) en cours, ${backup.recentChannels.size} chaîne(s) récente(s)"
+                    "Sauvegarde enregistrée (${backupSummary(backup.favorites.count, backup)})"
                 } else {
                     "Échec de l'enregistrement de la sauvegarde"
                 },
@@ -311,8 +314,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             tabStates.clear()
             if (!homeSelected) selectTab(currentTab)
             toast(
-                "Import terminé : $addedFavorites nouveau(x) favori(s), " +
-                    "${backup.progress.size} lecture(s) en cours, ${backup.recentChannels.size} chaîne(s) récente(s)",
+                "Sauvegarde importée (${backupSummary(addedFavorites, backup)})",
             )
         }
     }

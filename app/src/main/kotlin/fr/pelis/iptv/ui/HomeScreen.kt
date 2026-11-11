@@ -7,6 +7,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -129,12 +131,20 @@ fun HomeScreen(vm: MainViewModel) {
         uri -> uri?.let(vm::importBackup)
     }
     fun launchPicker(start: () -> Unit) {
-        try {
-            start()
-        } catch (_: ActivityNotFoundException) {
-            // Fréquent sur les téléviseurs : pas de gestionnaire de fichiers.
-            Toast.makeText(context, "Aucun gestionnaire de fichiers sur cet appareil", Toast.LENGTH_LONG).show()
+        val available = hasDocumentPicker(context)
+        if (available) {
+            try {
+                start()
+                return
+            } catch (_: ActivityNotFoundException) {
+            }
         }
+        // Fréquent sur les téléviseurs : pas de gestionnaire de fichiers (ou un simple bouchon système).
+        Toast.makeText(
+            context,
+            "Aucun gestionnaire de fichiers sur cet appareil : utilisez l'export depuis un téléphone ou une tablette",
+            Toast.LENGTH_LONG,
+        ).show()
     }
 
     val closeSearch = { searchOpen = false; vm.onQueryChange("") }
@@ -529,7 +539,8 @@ private fun AccountDialog(
         onDismissRequest = onDismiss,
         title = { Text("Mon abonnement") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Défilant : sur un téléviseur, la fenêtre est plus haute que l'écran.
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (account == null) {
                     Text("Informations du compte indisponibles.")
                 } else {
@@ -752,4 +763,18 @@ private fun SectionTitle(text: String) {
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 10.dp),
     )
+}
+
+/**
+ * Un vrai sélecteur de documents est-il installé ? Android TV en déclare souvent un « bouchon »
+ * (frameworkpackagestubs) qui se contente d'afficher « action non prise en charge ».
+ */
+private fun hasDocumentPicker(context: android.content.Context): Boolean {
+    val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT)
+        .addCategory(android.content.Intent.CATEGORY_OPENABLE)
+        .setType("*/*")
+    val pkg = runCatching {
+        context.packageManager.resolveActivity(intent, 0)?.activityInfo?.packageName
+    }.getOrNull() ?: return false
+    return !pkg.contains("frameworkpackagestubs")
 }
