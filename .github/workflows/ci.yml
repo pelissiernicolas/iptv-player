@@ -13,14 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
 
       # Pas de keystore.properties en CI : l'APK release est compilé et minifié (R8) mais non signé.
       # La publication signée reste faite à part, avec la clé de release.
@@ -29,7 +29,7 @@ jobs:
 
       - name: Rapports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rapports
           path: |
@@ -37,7 +37,7 @@ jobs:
             app/build/test-results/
 
       - name: APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: apk
           path: app/build/outputs/apk/**/*.apk
