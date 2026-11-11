@@ -29,6 +29,14 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -99,7 +107,26 @@ private fun SeriesContent(detail: SeriesDetail, entry: MediaEntry, onPlay: (seas
     }
     val episodes = detail.seasons[selected].orEmpty()
 
-    LazyColumn(Modifier.fillMaxSize()) {
+    // Télécommande : à l'ouverture, focus sur l'épisode à reprendre (sinon le premier),
+    // amené à l'écran ; jamais si l'utilisateur a déjà déplacé le focus.
+    val tv = LocalTvMode.current
+    val listState = rememberLazyListState()
+    val episodeFocus = remember { FocusRequester() }
+    val focusTarget = remember(selected) {
+        episodes.indexOfFirst { Library.progressFor("ep:${it.id}") != null }.takeIf { it >= 0 } ?: 0
+    }
+    var contentHasFocus by remember { mutableStateOf(false) }
+    if (tv && episodes.isNotEmpty()) {
+        LaunchedEffect(entry.id) {
+            if (contentHasFocus) return@LaunchedEffect
+            // 2 éléments avant les épisodes : en-tête de la série et onglets des saisons.
+            listState.scrollToItem((focusTarget + 2 - 1).coerceAtLeast(0))
+            withFrameNanos { }
+            runCatching { episodeFocus.requestFocus() }
+        }
+    }
+
+    LazyColumn(Modifier.fillMaxSize().onFocusChanged { contentHasFocus = it.hasFocus }, state = listState) {
         item {
             Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 AsyncImage(
@@ -171,7 +198,10 @@ private fun SeriesContent(detail: SeriesDetail, entry: MediaEntry, onPlay: (seas
                         }
                     },
                     leadingContent = { Icon(Icons.Filled.PlayArrow, null, tint = MaterialTheme.colorScheme.primary) },
-                    modifier = Modifier.tvItem().clickable { onPlay(selected, index) },
+                    modifier = Modifier
+                        .then(if (index == focusTarget) Modifier.focusRequester(episodeFocus) else Modifier)
+                        .tvItem()
+                        .clickable { onPlay(selected, index) },
                 )
             }
         }

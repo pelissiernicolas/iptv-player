@@ -13,6 +13,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -58,20 +66,28 @@ import fr.pelis.iptv.data.Library
 import fr.pelis.iptv.data.MediaEntry
 
 /** Fiche détaillée d'un film avant lecture. */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MovieScreen(vm: MainViewModel, entry: MediaEntry) {
     BackHandler { vm.closeMovie() }
-    val context = LocalContext.current
+    val tv = LocalTvMode.current
     val detail = vm.movieDetail
     val isFavorite = entry.id in vm.favorites[ContentType.VOD].orEmpty()
-    val progress = Library.progressFor("vod:${entry.id}")
-    val extension = detail?.extension ?: entry.extension
-    // Télécommande : focus direct sur « Lecture ».
+
+    // Télécommande : focus sur « Lecture / Reprendre » à l'ouverture, puis de nouveau quand les
+    // détails arrivent (la mise en page change) — seulement si rien n'a le focus, pour ne jamais
+    // reprendre la main à quelqu'un qui a déjà commencé à naviguer.
     val playFocus = remember { FocusRequester() }
-    if (LocalTvMode.current) LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
+    var contentHasFocus by remember { mutableStateOf(false) }
+    if (tv) {
+        LaunchedEffect(vm.movieBusy, detail) {
+            withFrameNanos { }
+            if (!contentHasFocus) runCatching { playFocus.requestFocus() }
+        }
+    }
 
     Scaffold(
+        modifier = Modifier.onFocusChanged { contentHasFocus = it.hasFocus },
         topBar = {
             TopAppBar(
                 title = { Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -92,130 +108,189 @@ fun MovieScreen(vm: MainViewModel, entry: MediaEntry) {
             )
         },
     ) { padding ->
-        Column(
-            Modifier
-                .padding(padding)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+        if (tv) {
+            MovieTvLayout(vm, entry, playFocus, Modifier.padding(padding))
+        } else {
+            MovieMobileLayout(vm, entry, playFocus, Modifier.padding(padding))
+        }
+    }
+}
+
+/**
+ * Téléviseur : tout tient dans la première vue. Affiche à gauche ; titre, actions puis résumé
+ * à droite. Le visuel de fond est une simple ambiance derrière le contenu (il ne prend pas de place).
+ */
+@Composable
+private fun MovieTvLayout(vm: MainViewModel, entry: MediaEntry, playFocus: FocusRequester, modifier: Modifier) {
+    val detail = vm.movieDetail
+    Box(modifier.fillMaxSize()) {
+        detail?.backdrop?.let { backdrop ->
+            AsyncImage(
+                model = backdrop, contentDescription = null, contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.horizontalGradient(
+                        0f to MaterialTheme.colorScheme.background,
+                        0.55f to MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                        1f to MaterialTheme.colorScheme.background.copy(alpha = 0.6f),
+                    ),
+                ),
+            )
+        }
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(40.dp),
         ) {
-            // Bandeau
-            val backdrop = detail?.backdrop
-            if (backdrop != null) {
-                Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
-                    AsyncImage(
-                        model = backdrop, contentDescription = null, contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    Box(
-                        Modifier.fillMaxSize().background(
-                            Brush.verticalGradient(
-                                0.5f to Color.Transparent,
-                                1f to MaterialTheme.colorScheme.background,
-                            ),
-                        ),
-                    )
-                }
-            }
-
-            Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                AsyncImage(
-                    model = detail?.poster ?: entry.image,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(width = 110.dp, height = 165.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                )
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        detail?.name?.ifBlank { null } ?: entry.name,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    val meta = listOfNotNull(
-                        detail?.releaseDate?.take(4),
-                        detail?.duration,
-                        (detail?.rating ?: entry.rating)?.takeIf { it != "0" }?.let { "★ $it" },
-                    ).joinToString(" · ")
-                    if (meta.isNotEmpty()) {
-                        Text(meta, style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                    }
-                    detail?.genre?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                    if (vm.movieBusy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                }
-            }
-
-            // Boutons
-            FlowRow(
-                Modifier.padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (progress != null) {
-                    Button(
-                        onClick = { vm.playVod(context, entry, extension, progress.position) },
-                        modifier = Modifier.focusRequester(playFocus).tvItem(CircleShape),
-                    ) {
-                        Icon(Icons.Filled.PlayArrow, null)
-                        Text("  Reprendre à ${formatDuration(progress.position)}")
-                    }
-                    OutlinedButton(
-                        onClick = { vm.playVod(context, entry, extension) },
-                        modifier = Modifier.tvItem(CircleShape),
-                    ) {
-                        Icon(Icons.Filled.Replay, null)
-                        Text("  Depuis le début")
-                    }
-                } else {
-                    Button(
-                        onClick = { vm.playVod(context, entry, extension) },
-                        modifier = Modifier.focusRequester(playFocus).tvItem(CircleShape),
-                    ) {
-                        Icon(Icons.Filled.PlayArrow, null)
-                        Text("  Lecture")
-                    }
-                }
-                detail?.trailerYoutubeId?.let { id ->
-                    OutlinedButton(modifier = Modifier.tvItem(CircleShape), onClick = {
-                        runCatching {
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$id")),
-                            )
-                        }
-                    }) {
-                        Icon(Icons.Filled.Theaters, null)
-                        Text("  Bande-annonce")
-                    }
-                }
-            }
-            if (progress != null) {
-                ThinProgress(
-                    progress.position.toFloat() / progress.duration,
-                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp).clip(RoundedCornerShape(2.dp)),
-                )
-            }
-
+            AsyncImage(
+                model = detail?.poster ?: entry.image,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .width(260.dp)
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+            )
             Column(
-                Modifier.padding(16.dp).widthIn(max = 720.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                (detail?.plot ?: entry.plot)?.let {
-                    Text(it, style = MaterialTheme.typography.bodyMedium)
-                }
-                detail?.director?.let { InfoBlock("Réalisation", it) }
-                detail?.cast?.let { InfoBlock("Distribution", it) }
-                vm.movieError?.let {
-                    Text(
-                        "Détails indisponibles ($it). La lecture reste possible.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                MovieHeader(vm, entry, titleStyle = MaterialTheme.typography.headlineMedium)
+                MovieActions(vm, entry, playFocus)
+                MovieDetails(vm, entry)
             }
+        }
+    }
+}
+
+/** Téléphone / tablette : bandeau, en-tête, actions puis détails, dans une colonne défilante. */
+@Composable
+private fun MovieMobileLayout(vm: MainViewModel, entry: MediaEntry, playFocus: FocusRequester, modifier: Modifier) {
+    val detail = vm.movieDetail
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        detail?.backdrop?.let { backdrop ->
+            Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
+                AsyncImage(
+                    model = backdrop, contentDescription = null, contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.verticalGradient(
+                            0.5f to Color.Transparent,
+                            1f to MaterialTheme.colorScheme.background,
+                        ),
+                    ),
+                )
+            }
+        }
+        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            AsyncImage(
+                model = detail?.poster ?: entry.image,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(width = 110.dp, height = 165.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+            )
+            MovieHeader(vm, entry, titleStyle = MaterialTheme.typography.titleLarge)
+        }
+        Column(Modifier.padding(horizontal = 16.dp)) { MovieActions(vm, entry, playFocus) }
+        Column(Modifier.padding(16.dp).widthIn(max = 720.dp)) { MovieDetails(vm, entry) }
+    }
+}
+
+@Composable
+private fun MovieHeader(vm: MainViewModel, entry: MediaEntry, titleStyle: TextStyle) {
+    val detail = vm.movieDetail
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(detail?.name?.ifBlank { null } ?: entry.name, style = titleStyle, fontWeight = FontWeight.SemiBold)
+        val meta = listOfNotNull(
+            detail?.releaseDate?.take(4),
+            detail?.duration,
+            (detail?.rating ?: entry.rating)?.takeIf { it != "0" }?.let { "★ $it" },
+        ).joinToString(" · ")
+        if (meta.isNotEmpty()) {
+            Text(meta, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        }
+        detail?.genre?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        }
+        if (vm.movieBusy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MovieActions(vm: MainViewModel, entry: MediaEntry, playFocus: FocusRequester) {
+    val context = LocalContext.current
+    val detail = vm.movieDetail
+    val progress = Library.progressFor("vod:${entry.id}")
+    val extension = detail?.extension ?: entry.extension
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (progress != null) {
+            Button(
+                onClick = { vm.playVod(context, entry, extension, progress.position) },
+                modifier = Modifier.focusRequester(playFocus).tvItem(CircleShape),
+            ) {
+                Icon(Icons.Filled.PlayArrow, null)
+                Text("  Reprendre à ${formatDuration(progress.position)}")
+            }
+            OutlinedButton(
+                onClick = { vm.playVod(context, entry, extension) },
+                modifier = Modifier.tvItem(CircleShape),
+            ) {
+                Icon(Icons.Filled.Replay, null)
+                Text("  Depuis le début")
+            }
+        } else {
+            Button(
+                onClick = { vm.playVod(context, entry, extension) },
+                modifier = Modifier.focusRequester(playFocus).tvItem(CircleShape),
+            ) {
+                Icon(Icons.Filled.PlayArrow, null)
+                Text("  Lecture")
+            }
+        }
+        detail?.trailerYoutubeId?.let { id ->
+            OutlinedButton(modifier = Modifier.tvItem(CircleShape), onClick = {
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$id")))
+                }
+            }) {
+                Icon(Icons.Filled.Theaters, null)
+                Text("  Bande-annonce")
+            }
+        }
+    }
+    if (progress != null) {
+        ThinProgress(
+            progress.position.toFloat() / progress.duration,
+            Modifier.padding(vertical = 12.dp).widthIn(max = 480.dp).clip(RoundedCornerShape(2.dp)),
+        )
+    }
+}
+
+@Composable
+private fun MovieDetails(vm: MainViewModel, entry: MediaEntry) {
+    val detail = vm.movieDetail
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        (detail?.plot ?: entry.plot)?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+        detail?.director?.let { InfoBlock("Réalisation", it) }
+        detail?.cast?.let { InfoBlock("Distribution", it) }
+        vm.movieError?.let {
+            Text(
+                "Détails indisponibles ($it). La lecture reste possible.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }

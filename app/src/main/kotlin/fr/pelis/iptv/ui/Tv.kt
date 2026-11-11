@@ -135,8 +135,14 @@ fun Modifier.rememberFocus(key: String): Modifier {
     if (memory.pending == key) {
         LaunchedEffect(key) {
             withFrameNanos { } // laisse la liste finir de se placer
-            if (runCatching { requester.requestFocus() }.isSuccess) memory.pending = null
+            runCatching { requester.requestFocus() }
         }
     }
-    return focusRequester(requester).onFocusChanged { if (it.isFocused) memory.focused(key) }
+    // Restauration confirmée par le focus réellement reçu (pas par l'absence d'erreur).
+    return focusRequester(requester).onFocusChanged {
+        if (it.isFocused) {
+            memory.pending = null
+            memory.focused(key)
+        }
+    }
 }

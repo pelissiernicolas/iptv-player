@@ -59,6 +59,15 @@ class SensitiveInputTest {
     }
 
     @Test
+    fun partialAuthorityBeforeAtIsNotSaved() {
+        // Cas reproduit par l'audit 1.4.4 : identifiants tapés avant le « @hote ».
+        for (typed in listOf("https://bob:s3cr3t", "  https://bob:s3cr3t", "bob:s3cr3t", "http://bob:s3cr3t/x")) {
+            assertFalse(typed, XtreamClient.redactServerInput(typed).contains("s3cr3t"))
+            assertEquals(typed, "", XtreamClient.redactServerInput(typed))
+        }
+    }
+
+    @Test
     fun ordinaryInputIsKeptWhileTyping() {
         assertEquals("exemple.com", XtreamClient.redactServerInput("exemple.com"))
         assertEquals("http://exemple.com:8080", XtreamClient.redactServerInput("http://exemple.com:8080"))

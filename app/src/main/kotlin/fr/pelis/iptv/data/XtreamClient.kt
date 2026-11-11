@@ -258,6 +258,9 @@ class XtreamClient(val credentials: Credentials) {
 
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+        /** Adresse en cours de frappe, sans rien de sensible : « http://exem », « exemple.c ». */
+        private val PARTIAL_HOST = Regex("^([a-zA-Z][a-zA-Z0-9+.-]*://)?[A-Za-z0-9.-]*$")
+
         private val http: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(90, TimeUnit.SECONDS)
@@ -298,8 +301,10 @@ class XtreamClient(val credentials: Credentials) {
             val hasScheme = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://").containsMatchIn(t)
             val url = (if (hasScheme) t else "http://$t").toHttpUrlOrNull()
             if (url == null) {
-                // Lien incomplet (« https://bob:secret@ », « …?password=… ») : rien n'est gardé.
-                return if (t.any { it == '@' || it == '?' || it == '=' || it == '#' || it == '&' }) "" else t
+                // Saisie qu'on ne sait pas analyser (« https://bob:secret », « …@ », « …?password=… ») :
+                // on ne garde que le début d'une adresse en cours de frappe (lettres, chiffres, points,
+                // tirets), jamais de « : » d'autorité qui pourrait être un mot de passe.
+                return if (PARTIAL_HOST.matches(t)) t else ""
             }
             val safe = url.newBuilder().username("").password("").query(null).fragment(null).build().toString()
             val cleaned = if (url.encodedPath == "/" && !t.trimEnd().endsWith("/")) safe.trimEnd('/') else safe

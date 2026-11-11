@@ -58,6 +58,10 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.focus.onFocusChanged
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -133,17 +137,31 @@ fun HomeScreen(vm: MainViewModel) {
     // Télécommande : au retour d'une fiche, le focus revient sur l'élément quitté ;
     // sinon (ou s'il n'est plus affiché) focus initial sur le menu latéral.
     val focusMemory = LocalFocusMemory.current
+    val loading = if (searchMode) vm.searching || vm.searchResults == null else state.loading
+    val currentLoading by rememberUpdatedState(loading)
+    var screenHasFocus by remember { mutableStateOf(false) }
     if (tv) LaunchedEffect(Unit) {
         if (focusMemory?.pending != null) {
-            kotlinx.coroutines.delay(800)
-            if (focusMemory.pending == null) return@LaunchedEffect
+            // On attend que la liste soit chargée (pas un délai fixe), puis qu'elle soit placée.
+            snapshotFlow { currentLoading }.first { !it }
+            kotlinx.coroutines.delay(400)
+            // Élément retrouvé, ou l'utilisateur a déjà bougé : on ne touche à rien.
+            if (focusMemory.pending == null || screenHasFocus) {
+                focusMemory.pending = null
+                return@LaunchedEffect
+            }
             focusMemory.pending = null
         }
-        runCatching { navFocus.requestFocus() }
+        if (!screenHasFocus) runCatching { navFocus.requestFocus() }
     }
-    val loading = if (searchMode) vm.searching || vm.searchResults == null else state.loading
 
     Scaffold(
+        // Dès qu'un élément de l'écran a le focus (restauré ou choisi par l'utilisateur),
+        // plus aucune restauration différée ne doit le déplacer.
+        modifier = Modifier.onFocusChanged {
+            screenHasFocus = it.hasFocus
+            if (it.hasFocus) focusMemory?.pending = null
+        },
         topBar = {
             TopAppBar(
                 title = {
