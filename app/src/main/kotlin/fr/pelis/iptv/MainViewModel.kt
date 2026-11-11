@@ -14,6 +14,7 @@ import fr.pelis.iptv.data.ContentType
 import fr.pelis.iptv.data.Profile
 import fr.pelis.iptv.data.Episode
 import fr.pelis.iptv.data.EpgProgram
+import fr.pelis.iptv.data.Backup
 import fr.pelis.iptv.data.Library
 import fr.pelis.iptv.data.MovieDetail
 import fr.pelis.iptv.data.WatchProgress
@@ -230,6 +231,90 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         update = null
         updateProgress = null
         updateError = null
+    }
+
+    /** Nom proposé pour le fichier de sauvegarde. */
+    fun backupFileName(): String {
+        val date = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.FRANCE).format(java.util.Date())
+        val profile = activeProfile?.name.orEmpty().filter { it.isLetterOrDigit() }.take(20)
+        return listOf("IPTV-Player", profile, date).filter { it.isNotEmpty() }.joinToString("-") + ".json"
+    }
+
+    /** Écrit favoris, progression et chaînes récentes du profil actif dans [uri] (choisi par l'utilisateur). */
+    fun exportBackup(uri: android.net.Uri) {
+        val owner = activeProfile?.id ?: return
+        val (progressList, recent) = Library.snapshot(owner)
+        val backup = Backup(
+            exportedAt = System.currentTimeMillis(),
+            favorites = Backup.Favorites(
+                live = favorites[ContentType.LIVE].orEmpty().sorted(),
+                vod = favorites[ContentType.VOD].orEmpty().sorted(),
+                series = favorites[ContentType.SERIES].orEmpty().sorted(),
+            ),
+            progress = progressList,
+            recentChannels = recent,
+        )
+        val resolver = getApplication<Application>().contentResolver
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    resolver.openOutputStream(uri, "wt")!!.use { it.write(Backup.encode(backup).toByteArray()) }
+                }
+            }
+            toast(
+                if (result.isSuccess) {
+                    "Sauvegarde enregistrée : ${backup.favorites.count} favori(s), " +
+                        "${backup.progress.size} lecture(s) en cours, ${backup.recentChannels.size} chaîne(s) récente(s)"
+                } else {
+                    "Échec de l'enregistrement de la sauvegarde"
+                },
+            )
+        }
+    }
+
+    /** Fusionne la sauvegarde [uri] dans le profil actif : rien n'est supprimé sur l'appareil. */
+    fun importBackup(uri: android.net.Uri) {
+        val owner = activeProfile?.id ?: return
+        val resolver = getApplication<Application>().contentResolver
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bytes = resolver.openInputStream(uri)!!.use { input ->
+                        val buffer = input.readNBytesCompat(Backup.MAX_BYTES + 1)
+                        require(buffer.size <= Backup.MAX_BYTES) { "fichier trop volumineux" }
+                        buffer
+                    }
+                    Backup.decode(bytes.decodeToString())
+                }
+            }
+            val backup = result.getOrElse { e ->
+                val reason = (e as? IllegalArgumentException)?.message ?: "fichier illisible"
+                toast("Import impossible : $reason")
+                return@launch
+            }
+            // Le profil a pu changer pendant la lecture du fichier : on n'importe que dans celui choisi.
+            if (activeProfile?.id != owner) return@launch
+            var addedFavorites = 0
+            ContentType.entries.forEach { type ->
+                val current = favorites[type].orEmpty()
+                val merged = current + backup.favorites[type]
+                addedFavorites += merged.size - current.size
+                if (merged.size != current.size) {
+                    favorites[type] = merged
+                    store.setFavorites(owner, type, merged)
+                }
+            }
+            Library.importData(owner, backup.progress, backup.recentChannels)
+            // Les listes affichées sont recalculées (catégorie Favoris) ; le catalogue en cache reste.
+            loadJobs.values.forEach { it.cancel() }
+            loadJobs.clear()
+            tabStates.clear()
+            if (!homeSelected) selectTab(currentTab)
+            toast(
+                "Import terminé : $addedFavorites nouveau(x) favori(s), " +
+                    "${backup.progress.size} lecture(s) en cours, ${backup.recentChannels.size} chaîne(s) récente(s)",
+            )
+        }
     }
 
     private fun toast(message: String) {
@@ -842,4 +927,16 @@ private class TimedCache<K, V>(private val max: Int, private val ttlMs: Long) {
     }
 
     fun clear() = map.clear()
+}
+
+/** Lit au plus [limit] octets (InputStream.readNBytes n'existe qu'à partir d'Android 13). */
+private fun java.io.InputStream.readNBytesCompat(limit: Int): ByteArray {
+    val out = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(16 * 1024)
+    while (out.size() < limit) {
+        val n = read(buffer, 0, minOf(buffer.size, limit - out.size()))
+        if (n < 0) break
+        out.write(buffer, 0, n)
+    }
+    return out.toByteArray()
 }

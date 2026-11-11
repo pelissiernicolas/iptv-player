@@ -1,6 +1,10 @@
 package fr.pelis.iptv.ui
 
+import android.content.ActivityNotFoundException
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -117,6 +121,21 @@ fun HomeScreen(vm: MainViewModel) {
     val context = LocalContext.current
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var showAccount by remember { mutableStateOf(false) }
+    // Sauvegarde : l'utilisateur choisit l'emplacement (Téléchargements, Drive…) via le sélecteur système.
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) {
+        uri -> uri?.let(vm::exportBackup)
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        uri -> uri?.let(vm::importBackup)
+    }
+    fun launchPicker(start: () -> Unit) {
+        try {
+            start()
+        } catch (_: ActivityNotFoundException) {
+            // Fréquent sur les téléviseurs : pas de gestionnaire de fichiers.
+            Toast.makeText(context, "Aucun gestionnaire de fichiers sur cet appareil", Toast.LENGTH_LONG).show()
+        }
+    }
 
     val closeSearch = { searchOpen = false; vm.onQueryChange("") }
     BackHandler(enabled = searchOpen) { closeSearch() }
@@ -313,6 +332,11 @@ fun HomeScreen(vm: MainViewModel) {
             checkingUpdate = vm.checkingUpdate,
             onCheckUpdate = { showAccount = false; vm.checkForUpdate(manual = true) },
             onRefreshCatalog = { showAccount = false; vm.refreshCatalog() },
+            onExport = { showAccount = false; launchPicker { exportLauncher.launch(vm.backupFileName()) } },
+            onImport = {
+                showAccount = false
+                launchPicker { importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }
+            },
             onDismiss = { showAccount = false },
         )
     }
@@ -497,6 +521,8 @@ private fun AccountDialog(
     checkingUpdate: Boolean,
     onCheckUpdate: () -> Unit,
     onRefreshCatalog: () -> Unit,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -518,6 +544,12 @@ private fun AccountDialog(
                 server?.let { InfoRow("Serveur", it) }
                 TextButton(onClick = onRefreshCatalog, contentPadding = PaddingValues(0.dp)) {
                     Text("Actualiser le catalogue (chaînes, films, séries)")
+                }
+                TextButton(onClick = onExport, contentPadding = PaddingValues(0.dp)) {
+                    Text("Exporter favoris et historique")
+                }
+                TextButton(onClick = onImport, contentPadding = PaddingValues(0.dp)) {
+                    Text("Importer une sauvegarde")
                 }
                 InfoRow("Appareil", if (tvMode) "Téléviseur" else "Smartphone / tablette")
                 TextButton(onClick = onChangeDevice, contentPadding = PaddingValues(0.dp)) {

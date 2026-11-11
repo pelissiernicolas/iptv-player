@@ -89,6 +89,28 @@ object Library {
         }
     }
 
+    /** Copie des données du profil [owner], pour une sauvegarde. */
+    fun snapshot(owner: String): Pair<List<WatchProgress>, List<RecentChannel>> =
+        if (owner == profileId) progress.toList() to recentChannels.toList()
+        else readProgress(owner) to readRecent(owner)
+
+    /** Fusionne une sauvegarde dans le profil [owner] (la donnée la plus récente l'emporte). */
+    fun importData(owner: String, imported: List<WatchProgress>, importedRecent: List<RecentChannel>) {
+        val (currentProgress, currentRecent) = snapshot(owner)
+        val mergedProgress = BackupMerge.progress(currentProgress, imported, MAX_PROGRESS)
+        val mergedRecent = BackupMerge.recent(currentRecent, importedRecent, MAX_RECENT)
+        prefs?.edit()
+            ?.putString(progressKey(owner), json.encodeToString(mergedProgress))
+            ?.putString(recentKey(owner), json.encodeToString(mergedRecent))
+            ?.apply()
+        if (owner == profileId) {
+            progress.clear()
+            progress.addAll(mergedProgress)
+            recentChannels.clear()
+            recentChannels.addAll(mergedRecent)
+        }
+    }
+
     fun deleteProfileData(id: String) {
         prefs?.edit()?.remove(progressKey(id))?.remove(recentKey(id))?.apply()
         if (profileId == id) setProfile(null)
