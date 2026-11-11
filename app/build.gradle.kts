@@ -13,9 +13,9 @@ android {
     applicationId = "fr.pelis.iptv"
     minSdk = 24
     targetSdk = 36
-    versionCode = 17
+    versionCode = 18
     // -PversionNameOverride=… : uniquement pour tester la mise à jour automatique.
-    versionName = (project.findProperty("versionNameOverride") as String?) ?: "1.4.9"
+    versionName = (project.findProperty("versionNameOverride") as String?) ?: "1.4.10"
   }
 
   // Clé de signature des releases : décrite dans keystore.properties (non versionné).

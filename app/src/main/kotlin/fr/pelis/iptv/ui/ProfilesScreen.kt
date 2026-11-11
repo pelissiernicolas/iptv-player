@@ -1,6 +1,8 @@
 package fr.pelis.iptv.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,8 @@ import androidx.compose.material.icons.filled.Tv
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -77,13 +81,24 @@ fun ProfileAvatar(profile: Profile, size: Int = 48) {
 fun ProfilesScreen(vm: MainViewModel) {
     var toDelete by remember { mutableStateOf<Profile?>(null) }
     val firstFocus = remember { FocusRequester() }
-    if (LocalTvMode.current) LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
+    val lastFocus = remember { FocusRequester() }
+    val hasProfiles = vm.profiles.isNotEmpty()
+    // Focus initial sur le premier profil, redemandé une fois la liste affichée.
+    if (LocalTvMode.current) LaunchedEffect(vm.profiles.size) {
+        withFrameNanos { }
+        runCatching { firstFocus.requestFocus() }
+    }
 
     Box(Modifier.fillMaxSize().systemBarsPadding()) {
         // Changer le type d'appareil (Téléviseur / Smartphone)
         IconButton(
             onClick = vm::openDeviceSetup,
-            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp).tvItem(CircleShape),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(12.dp)
+                // Télécommande : rien n'est sous cette icône, flèche bas mène au premier profil.
+                .focusProperties { if (hasProfiles) down = firstFocus }
+                .tvItem(CircleShape),
         ) {
             Icon(if (vm.tvMode) Icons.Filled.Tv else Icons.Filled.Smartphone, "Type d'appareil")
         }
@@ -101,29 +116,41 @@ fun ProfilesScreen(vm: MainViewModel) {
                 )
             }
             itemsIndexed(vm.profiles, key = { _, it -> it.id }) { index, profile ->
+                // La zone « ouvrir le profil » et les boutons Modifier / Supprimer sont côte à côte
+                // (et non imbriqués) : à la télécommande, flèche droite passe de l'un à l'autre.
                 Card(
-                    onClick = { vm.openProfile(profile) },
                     modifier = Modifier
                         .widthIn(max = 560.dp)
-                        .fillMaxWidth()
-                        .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier)
-                        .tvItem(RoundedCornerShape(12.dp)),
+                        .fillMaxWidth(),
                 ) {
                     Row(
-                        Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+                        Modifier.padding(end = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        ProfileAvatar(profile)
-                        Spacer(Modifier.width(16.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(profile.name, style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(
-                                "${profile.username} · ${profile.server.substringAfter("://")}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            )
+                        val shape = RoundedCornerShape(12.dp)
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier)
+                                .then(if (index == vm.profiles.lastIndex) Modifier.focusRequester(lastFocus) else Modifier)
+                                .tvItem(shape)
+                                .clip(shape)
+                                .clickable { vm.openProfile(profile) }
+                                .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ProfileAvatar(profile)
+                            Spacer(Modifier.width(16.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(profile.name, style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    "${profile.username} · ${profile.server.substringAfter("://")}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                         IconButton(onClick = { vm.editProfile(profile) }, modifier = Modifier.tvItem(CircleShape)) {
                             Icon(Icons.Filled.Edit, "Modifier")
@@ -140,7 +167,12 @@ fun ProfilesScreen(vm: MainViewModel) {
             onClick = vm::addProfile,
             icon = { Icon(Icons.Filled.Add, null) },
             text = { Text("Ajouter un profil") },
-            modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp).tvItem(RoundedCornerShape(16.dp)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(24.dp)
+                // Flèche haut : retour au dernier profil de la liste (pas à l'icône du coin).
+                .focusProperties { if (hasProfiles) up = lastFocus }
+                .tvItem(RoundedCornerShape(16.dp)),
         )
     }
 
