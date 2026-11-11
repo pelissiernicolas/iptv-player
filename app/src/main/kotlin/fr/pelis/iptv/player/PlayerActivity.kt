@@ -38,6 +38,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
@@ -186,6 +187,8 @@ class PlayerActivity : FragmentActivity() {
             setTextColor(Color.WHITE)
             textSize = 18f
             gravity = Gravity.CENTER
+            setPadding(48, 24, 48, 24)
+            maxWidth = (resources.displayMetrics.widthPixels * 0.8).toInt()
             visibility = View.GONE
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER,
@@ -338,6 +341,8 @@ class PlayerActivity : FragmentActivity() {
             val index = local?.currentMediaItemIndex ?: resumeIndex
             val position = if (local == null || items.getOrNull(index)?.isLive == true) resumePosition
             else local.currentPosition
+            // Le lecteur local connaît le format du son : on le note avant de le libérer.
+            local?.let { rememberAudioFormat(index, it) }
             releasePlayer()
             casting = true
             loadOnCast(index, position)
@@ -369,9 +374,9 @@ class PlayerActivity : FragmentActivity() {
         c.prepare()
         playerView.player = c
         playerView.showController()
-        val device = CastSupport.context(this)?.sessionManager?.currentCastSession?.castDevice?.friendlyName
-        castBanner.text = "Lecture sur ${device ?: "Chromecast"}"
         castBanner.visibility = View.VISIBLE
+        updateCastBanner(index)
+        castAudioWarning(index)?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
         lastCastIndex = index
         lastCastPosition = startPosition
         onItemChanged()
@@ -387,12 +392,44 @@ class PlayerActivity : FragmentActivity() {
     }
 
     /**
+     * Mémorise le format de la première piste audio (celle que le Chromecast lira)
+     * de l'élément [index], lu depuis le lecteur local.
+     */
+    private fun rememberAudioFormat(index: Int, local: Player) {
+        val item = items.getOrNull(index) ?: return
+        val audio = local.currentTracks.groups.firstOrNull { it.type == C.TRACK_TYPE_AUDIO } ?: return
+        val mime = audio.getTrackFormat(0).sampleMimeType ?: return
+        audioFormats[item.url] = mime
+    }
+
+    /** Message d'avertissement si le son de l'élément [index] ne peut pas être lu par le Chromecast. */
+    private fun castAudioWarning(index: Int): String? {
+        val item = items.getOrNull(index) ?: return null
+        if (castMediaItemUrl(item).endsWith(".m3u8", ignoreCase = true)) return null
+        val codec = CAST_UNSUPPORTED_AUDIO[audioFormats[item.url] ?: return null] ?: return null
+        return "Le son de cette vidéo est en $codec : le Chromecast ne peut pas le lire depuis ce fichier, " +
+            "l'image passera sans le son. Coupez le Cast pour continuer sur le téléphone."
+    }
+
+    private fun updateCastBanner(index: Int) {
+        val device = CastSupport.context(this)?.sessionManager?.currentCastSession?.castDevice?.friendlyName
+        val warning = castAudioWarning(index)
+        castBanner.text = buildString {
+            append("Lecture sur ${device ?: "Chromecast"}")
+            if (warning != null) append("\n\n⚠ ").append(warning)
+        }
+        castBanner.setBackgroundColor(if (warning != null) 0xCC5D1A1A.toInt() else Color.TRANSPARENT)
+    }
+
+    private fun castMediaItemUrl(item: PlayItem) = if (item.isLive) item.fallbackUrl ?: item.url else item.url
+
+    /**
      * Élément pour le récepteur Cast par défaut : il ne lit pas le MPEG-TS brut,
      * donc le direct est envoyé en HLS (.m3u8).
      */
     private fun castMediaItem(index: Int): MediaItem {
         val item = items[index]
-        val url = if (item.isLive) item.fallbackUrl ?: item.url else item.url
+        val url = castMediaItemUrl(item)
         val mime = when {
             url.endsWith(".m3u8", ignoreCase = true) -> MimeTypes.APPLICATION_M3U8
             url.endsWith(".mkv", ignoreCase = true) -> MimeTypes.VIDEO_MATROSKA
@@ -435,6 +472,11 @@ class PlayerActivity : FragmentActivity() {
 
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = onItemChanged()
+
+        override fun onTracksChanged(tracks: Tracks) {
+            val local = player ?: return
+            if (!casting) rememberAudioFormat(local.currentMediaItemIndex, local)
+        }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (!isPlaying) saveProgress()
@@ -490,6 +532,7 @@ class PlayerActivity : FragmentActivity() {
         }
         updateTitle()
         updateLastChannelButton()
+        if (casting) updateCastBanner(index)
         val item = items.getOrNull(index) ?: return
         if (tvMode && item.isLive && !playerView.isControllerFullyVisible) showZapOverlay(index)
         if (item.isLive && item.contentId != null) {
@@ -672,5 +715,21 @@ class PlayerActivity : FragmentActivity() {
         const val CONTROL_PREVIOUS = 3
         /** Taille maximale de la file d'attente envoyée au Chromecast. */
         const val CAST_WINDOW = 20
+
+        /** Format audio connu par URL (rempli pendant la lecture locale). */
+        val audioFormats = HashMap<String, String>()
+
+        /** Formats audio que le récepteur Cast par défaut ne décode pas dans un fichier (MKV, MP4…). */
+        val CAST_UNSUPPORTED_AUDIO = mapOf(
+            MimeTypes.AUDIO_AC3 to "Dolby Digital (AC3)",
+            MimeTypes.AUDIO_E_AC3 to "Dolby Digital Plus (E-AC3)",
+            MimeTypes.AUDIO_E_AC3_JOC to "Dolby Atmos (E-AC3 JOC)",
+            MimeTypes.AUDIO_AC4 to "Dolby AC-4",
+            MimeTypes.AUDIO_TRUEHD to "Dolby TrueHD",
+            MimeTypes.AUDIO_DTS to "DTS",
+            MimeTypes.AUDIO_DTS_HD to "DTS-HD",
+            MimeTypes.AUDIO_DTS_EXPRESS to "DTS Express",
+            MimeTypes.AUDIO_DTS_X to "DTS:X",
+        )
     }
 }
