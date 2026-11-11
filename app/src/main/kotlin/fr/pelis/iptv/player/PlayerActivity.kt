@@ -103,6 +103,7 @@ class PlayerActivity : FragmentActivity() {
     private var currentIndex = -1
     private var previousIndex = -1
     private lateinit var lastChannelButton: ImageButton
+    private lateinit var channelListButton: ImageButton
 
     private val handler = Handler(Looper.getMainLooper())
     private val progressSaver = object : Runnable {
@@ -160,6 +161,15 @@ class PlayerActivity : FragmentActivity() {
                 setOnClickListener { goToPreviousChannel() }
             }
             addView(lastChannelButton)
+            channelListButton = ImageButton(this@PlayerActivity).apply {
+                setImageResource(R.drawable.ic_channel_list)
+                setBackgroundColor(Color.TRANSPARENT)
+                contentDescription = "Liste des chaînes"
+                setPadding(24, 24, 24, 24)
+                visibility = if (items.firstOrNull()?.isLive == true && items.size > 1) View.VISIBLE else View.GONE
+                setOnClickListener { showChannelPicker() }
+            }
+            addView(channelListButton)
             if (!tvMode) CastSupport.createButton(this@PlayerActivity)?.let { addView(it) }
             if (pipSupported && !tvMode) {
                 addView(ImageButton(this@PlayerActivity).apply {
@@ -552,6 +562,36 @@ class PlayerActivity : FragmentActivity() {
         val live = items.firstOrNull()?.isLive == true
         lastChannelButton.visibility =
             if (live && previousIndex in items.indices && previousIndex != currentIndex) View.VISIBLE else View.GONE
+        if (::channelListButton.isInitialized) {
+            channelListButton.visibility = if (live && items.size > 1) View.VISIBLE else View.GONE
+        }
+    }
+
+    /**
+     * Liste des chaînes de la catégorie : un clic bascule directement sur la chaîne choisie,
+     * aussi bien sur le téléphone que sur le Chromecast.
+     */
+    private fun showChannelPicker() {
+        if (items.firstOrNull()?.isLive != true || items.size < 2) return
+        val current = currentIndex.coerceIn(0, items.lastIndex)
+        val names = items.mapIndexed { i, item -> "${i + 1}.  ${item.title}" }.toTypedArray()
+        val dialog = android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(if (casting) "Changer de chaîne sur la TV" else "Changer de chaîne")
+            .setSingleChoiceItems(names, current) { d, which ->
+                d.dismiss()
+                if (which != activeIndex()) seekToItem(which)
+            }
+            .setNegativeButton("Fermer", null)
+            .create()
+        dialog.setOnDismissListener { hideSystemUi() }
+        dialog.show()
+        dialog.listView?.setSelection(current)
+    }
+
+    /** Chaîne suivante / précédente dans toute la liste (y compris au-delà de la file Cast). */
+    private fun zap(delta: Int) {
+        val target = (currentIndex.takeIf { it >= 0 } ?: return) + delta
+        if (target in items.indices) seekToItem(target)
     }
 
     /** Bascule entre la chaîne actuelle et la précédente. */
@@ -658,8 +698,10 @@ class PlayerActivity : FragmentActivity() {
             val p = active ?: return
             when (intent.getIntExtra(EXTRA_CONTROL, 0)) {
                 CONTROL_PLAY_PAUSE -> if (p.isPlaying) p.pause() else p.play()
-                CONTROL_NEXT -> if (p.hasNextMediaItem()) p.seekToNextMediaItem()
-                CONTROL_PREVIOUS -> if (p.hasPreviousMediaItem()) p.seekToPreviousMediaItem()
+                CONTROL_NEXT -> if (items.firstOrNull()?.isLive == true) zap(1)
+                    else if (p.hasNextMediaItem()) p.seekToNextMediaItem()
+                CONTROL_PREVIOUS -> if (items.firstOrNull()?.isLive == true) zap(-1)
+                    else if (p.hasPreviousMediaItem()) p.seekToPreviousMediaItem()
             }
         }
     }
@@ -673,26 +715,30 @@ class PlayerActivity : FragmentActivity() {
             if (tvMode && live && !playerView.isControllerFullyVisible) {
                 when (event.keyCode) {
                     KeyEvent.KEYCODE_DPAD_UP -> {
-                        currentIndex.takeIf { it >= 0 }?.let { seekToItem(it + 1) }
+                        zap(1)
                         return true
                     }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        currentIndex.takeIf { it >= 0 }?.let { seekToItem(it - 1) }
+                        zap(-1)
                         return true
                     }
                 }
             }
             when (event.keyCode) {
                 KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_UP -> {
-                    if (p.hasNextMediaItem()) p.seekToNextMediaItem()
+                    if (live) zap(1) else if (p.hasNextMediaItem()) p.seekToNextMediaItem()
                     return true
                 }
                 KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> {
-                    if (p.hasPreviousMediaItem()) p.seekToPreviousMediaItem()
+                    if (live) zap(-1) else if (p.hasPreviousMediaItem()) p.seekToPreviousMediaItem()
                     return true
                 }
                 KeyEvent.KEYCODE_LAST_CHANNEL -> {
                     goToPreviousChannel()
+                    return true
+                }
+                KeyEvent.KEYCODE_GUIDE, KeyEvent.KEYCODE_MENU -> if (live && items.size > 1) {
+                    showChannelPicker()
                     return true
                 }
             }
