@@ -1,31 +1,121 @@
-name: CI
+
+name: CI Android
 
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*'
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Tests et compilation Android
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Java 17
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
-      - uses: gradle/actions/setup-gradle@v5
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v5
 
-      # Pas de keystore.properties en CI : l'APK release est compilé et minifié (R8) mais non signé.
-      # La publication signée reste faite à part, avec la clé de release.
-      - name: Tests unitaires, lint et compilation
-        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug assembleRelease
+      - name: Tests unitaires et lint
+        run: |
+          ./gradlew --no-daemon \
+            testDebugUnitTest lintDebug assembleDebug
+
+      - name: Restaurer la clé de signature
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          # Reconstruction du keystore privé
+          printf '%s' "$KEYSTORE_BASE64" \
+            | base64 --decode > app/release.jks
+
+          # Génération des propriétés Java
+          python3 - <<'PY'
+          import os
+
+          def escape(value):
+              result = []
+              for char in value:
+                  n = ord(char)
+                  if char in "\\:=#!":
+                      result.append("\\" + char)
+                  elif char == "\n":
+                      result.append("\\n")
+                  elif char == "\r":
+                      result.append("\\r")
+                  elif char == "\t":
+                      result.append("\\t")
+                  elif char == " ":
+                      result.append("\\ ")
+                  elif n < 32 or n > 126:
+                      if n <= 65535:
+                          result.append(f"\\u{n:04x}")
+                      else:
+                          n -= 65536
+                          result.append(
+                              f"\\u{0xD800 + (n >> 10):04x}"
+                              f"\\u{0xDC00 + (n & 1023):04x}"
+                          )
+                  else:
+                      result.append(char)
+              return "".join(result)
+
+          values = {
+              "storeFile": "release.jks",
+              "storePassword": os.environ["KEYSTORE_PASSWORD"],
+              "keyAlias": os.environ["KEY_ALIAS"],
+              "keyPassword": os.environ["KEY_PASSWORD"],
+          }
+
+          with open("keystore.properties", "w",
+                    encoding="ascii") as f:
+              for key, value in values.items():
+                  f.write(f"{key}={escape(value)}\n")
+          PY
+
+          chmod 600 app/release.jks keystore.properties
+
+      - name: Compiler la release signée
+        if: github.event_name != 'pull_request'
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Vérifier la signature APK
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/release/app-release.apk"
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
+            -name apksigner -type f | sort -V | tail -1)
+
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify \
+            --verbose \
+            --print-certs "$APK"
 
       - name: Rapports
         if: always()
@@ -35,9 +125,54 @@ jobs:
           path: |
             app/build/reports/
             app/build/test-results/
+          if-no-files-found: ignore
 
-      - name: APK
+      - name: APK Debug
         uses: actions/upload-artifact@v5
         with:
-          name: apk
-          path: app/build/outputs/apk/**/*.apk
+          name: IPTV-Player-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: APK Release signé
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v5
+        with:
+          name: IPTV-Player-release
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Supprimer les fichiers de signature
+        if: always()
+        shell: bash
+        run: |
+          rm -f app/release.jks keystore.properties
+
+  publish:
+    name: Publier GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Télécharger l'APK signé
+        uses: actions/download-artifact@v5
+        with:
+          name: IPTV-Player-release
+          path: release
+
+      - name: Publier sur GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release create "$GITHUB_REF_NAME" \
+            release/*.apk \
+            --title "IPTV Player $GITHUB_REF_NAME" \
+            --generate-notes
