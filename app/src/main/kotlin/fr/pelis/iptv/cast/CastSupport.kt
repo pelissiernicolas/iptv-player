@@ -28,24 +28,38 @@ class CastOptionsProvider : OptionsProvider {
 }
 
 object CastSupport {
+    // Contexte d'application uniquement (CastContext.getSharedInstance(applicationContext)) : pas de fuite d'activité.
+    @android.annotation.SuppressLint("StaticFieldLeak")
     private var cached: CastContext? = null
+    /** Services Google absents : définitif pour ce processus. */
     private var unavailable = false
+    /** Échec ponctuel (services Google en cours de mise à jour…) : nouvelle tentative après ce délai. */
+    private var retryAfter = 0L
+    private const val RETRY_DELAY_MS = 60_000L
 
     /** Contexte Cast, ou null si l'appareil n'a pas les services Google (ex. certaines box Android TV). */
     fun context(context: Context): CastContext? {
         cached?.let { return it }
-        if (unavailable) return null
+        if (unavailable || System.currentTimeMillis() < retryAfter) return null
         return try {
             val app = context.applicationContext
-            if (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(app) != ConnectionResult.SUCCESS) {
-                unavailable = true
-                null
-            } else {
-                @Suppress("DEPRECATION")
-                CastContext.getSharedInstance(app).also { cached = it }
+            when (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(app)) {
+                ConnectionResult.SUCCESS -> {
+                    @Suppress("DEPRECATION")
+                    CastContext.getSharedInstance(app).also { cached = it }
+                }
+                ConnectionResult.SERVICE_MISSING, ConnectionResult.SERVICE_INVALID -> {
+                    unavailable = true
+                    null
+                }
+                else -> {
+                    // Mise à jour requise, désactivés, en cours d'installation… : réessayable.
+                    retryAfter = System.currentTimeMillis() + RETRY_DELAY_MS
+                    null
+                }
             }
         } catch (_: Exception) {
-            unavailable = true
+            retryAfter = System.currentTimeMillis() + RETRY_DELAY_MS
             null
         }
     }

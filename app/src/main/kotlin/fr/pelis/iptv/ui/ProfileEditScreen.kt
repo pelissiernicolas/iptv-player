@@ -31,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -46,6 +47,11 @@ import fr.pelis.iptv.MainViewModel
 import fr.pelis.iptv.data.Profile
 import fr.pelis.iptv.data.XtreamClient
 
+private val RedactedServerSaver = Saver<String, String>(
+    save = { XtreamClient.redactServerInput(it) },
+    restore = { it },
+)
+
 /** Création ou modification d'un profil (compte Xtream Codes). */
 @Composable
 fun ProfileEditScreen(vm: MainViewModel, editing: Profile?) {
@@ -53,7 +59,11 @@ fun ProfileEditScreen(vm: MainViewModel, editing: Profile?) {
     BackHandler(enabled = canCancel) { vm.cancelEdit() }
 
     var name by rememberSaveable(editing?.id) { mutableStateOf(editing?.name ?: "") }
-    var server by rememberSaveable(editing?.id) { mutableStateOf(editing?.server ?: "") }
+    // Champ serveur : un lien M3U incomplet collé ici peut contenir un mot de passe.
+    // Seule sa version expurgée (sans paramètres ni identifiants) est sauvegardée par Android.
+    var server by rememberSaveable(editing?.id, stateSaver = RedactedServerSaver) {
+        mutableStateOf(editing?.server ?: "")
+    }
     var user by rememberSaveable(editing?.id) { mutableStateOf(editing?.username ?: "") }
     // Mot de passe : jamais dans l'état sauvegardé par Android (remember, pas rememberSaveable).
     var pass by remember(editing?.id) { mutableStateOf(editing?.password ?: "") }

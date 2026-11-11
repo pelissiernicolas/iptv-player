@@ -103,3 +103,18 @@ object PlaylistHolder {
         json.decodeFromString<PlaySession>(SecretBox.decrypt(file.readText()))
     }.getOrNull()?.also { current = it }
 }
+
+/**
+ * Position de la file d'un Chromecast ([remote], URL des éléments) dans notre liste ([local]) :
+ * l'index local du premier élément distant, si tous les éléments distants connus se suivent
+ * dans la liste locale. null si la TV lit autre chose.
+ */
+internal fun castQueueOffset(remote: List<String?>, local: List<String>): Int? {
+    if (remote.isEmpty() || remote.all { it == null }) return null
+    val firstKnown = remote.indexOfFirst { it != null }
+    return local.indices.firstOrNull { candidate ->
+        val start = candidate - firstKnown
+        start >= 0 && start + remote.size <= local.size &&
+            remote.withIndex().all { (i, url) -> url == null || local[start + i] == url }
+    }?.let { it - firstKnown }
+}

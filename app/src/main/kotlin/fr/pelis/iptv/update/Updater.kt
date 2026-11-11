@@ -175,10 +175,16 @@ object Updater {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
 
     fun openInstallPermissionSettings(context: Context) {
+        val security = Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // Android 7 : l'autorisation « sources inconnues » est globale, dans les réglages de sécurité.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            runCatching { context.startActivity(security) }
+            return
+        }
         val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { context.startActivity(intent) }
-            .onFailure { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { runCatching { context.startActivity(security) } }
     }
 
     /**
@@ -235,8 +241,12 @@ class UpdateResultReceiver : BroadcastReceiver() {
             else -> {
                 val detail = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
                 val reason = when (status) {
-                    PackageInstaller.STATUS_FAILURE_CONFLICT, PackageInstaller.STATUS_FAILURE_INCOMPATIBLE ->
-                        "la mise à jour n'est pas signée avec la même clé que l'application installée"
+                    PackageInstaller.STATUS_FAILURE_CONFLICT ->
+                        "conflit avec l'application installée (clé de signature différente ou version plus ancienne)"
+                    PackageInstaller.STATUS_FAILURE_INCOMPATIBLE ->
+                        "cette version n'est pas compatible avec l'appareil"
+                    PackageInstaller.STATUS_FAILURE_INVALID -> "fichier d'installation invalide ou abîmé"
+                    PackageInstaller.STATUS_FAILURE_BLOCKED -> "installation bloquée par l'appareil"
                     PackageInstaller.STATUS_FAILURE_STORAGE -> "espace de stockage insuffisant"
                     else -> detail ?: "erreur $status"
                 }

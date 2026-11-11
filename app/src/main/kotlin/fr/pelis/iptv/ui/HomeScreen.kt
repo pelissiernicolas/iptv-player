@@ -285,6 +285,7 @@ fun HomeScreen(vm: MainViewModel) {
             appVersion = vm.appVersion,
             checkingUpdate = vm.checkingUpdate,
             onCheckUpdate = { showAccount = false; vm.checkForUpdate(manual = true) },
+            onRefreshCatalog = { showAccount = false; vm.refreshCatalog() },
             onDismiss = { showAccount = false },
         )
     }
@@ -464,6 +465,7 @@ private fun AccountDialog(
     appVersion: String,
     checkingUpdate: Boolean,
     onCheckUpdate: () -> Unit,
+    onRefreshCatalog: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -483,6 +485,9 @@ private fun AccountDialog(
                     InfoRow("Connexions", "${account.activeConnections ?: "?"} / ${account.maxConnections ?: "?"}")
                 }
                 server?.let { InfoRow("Serveur", it) }
+                TextButton(onClick = onRefreshCatalog, contentPadding = PaddingValues(0.dp)) {
+                    Text("Actualiser le catalogue (chaînes, films, séries)")
+                }
                 InfoRow("Appareil", if (tvMode) "Téléviseur" else "Smartphone / tablette")
                 TextButton(onClick = onChangeDevice, contentPadding = PaddingValues(0.dp)) {
                     Text("Changer le type d'appareil")

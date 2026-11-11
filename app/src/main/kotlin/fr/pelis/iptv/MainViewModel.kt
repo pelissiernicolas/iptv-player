@@ -39,6 +39,8 @@ import kotlinx.coroutines.sync.withPermit
 import java.util.UUID
 
 sealed interface Screen {
+    /** Lecture des profils (déchiffrement) au démarrage. */
+    data object Loading : Screen
     data object Profiles : Screen
     data class EditProfile(val profile: Profile?) : Screen
     data object Home : Screen
@@ -69,10 +71,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val store = SessionStore(app)
     private var client: XtreamClient? = null
 
-    var screen by mutableStateOf<Screen>(Screen.Profiles); private set
+    var screen by mutableStateOf<Screen>(Screen.Loading); private set
+    /** Accès aux profils chiffrés : hors du thread principal, une opération à la fois. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val storeDispatcher = Dispatchers.IO.limitedParallelism(1)
 
     // Profils / connexion
-    var profiles by mutableStateOf(store.profiles()); private set
+    var profiles by mutableStateOf<List<Profile>>(emptyList()); private set
     var activeProfile by mutableStateOf<Profile?>(null); private set
     var account by mutableStateOf<AccountInfo?>(null); private set
     var loginBusy by mutableStateOf(false); private set
@@ -110,8 +115,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val epgFetchedAt = HashMap<String, Long>()
     private val epgSemaphore = Semaphore(4)
 
-    private val categoryCache = HashMap<Pair<ContentType, String>, List<MediaEntry>>()
-    private val allCache = HashMap<ContentType, List<MediaEntry>>()
+    /** Catalogue en mémoire : 40 catégories au plus, renouvelé après 30 min (ou « Actualiser »). */
+    private val categoryCache = TimedCache<Pair<ContentType, String>, List<MediaEntry>>(max = 40, ttlMs = CATALOG_TTL_MS)
+    /** Catalogue complet (recherche, favoris) : le plus lourd, un par type au plus. */
+    private val allCache = TimedCache<ContentType, List<MediaEntry>>(max = 3, ttlMs = CATALOG_TTL_MS)
     private val loadJobs = HashMap<ContentType, Job>()
     private var searchJob: Job? = null
     private var seriesJob: Job? = null
@@ -127,18 +134,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         Library.init(app)
-        if (store.profilesUnreadable) {
-            Toast.makeText(
-                app,
-                "Les profils enregistrés n'ont pas pu être relus sur cet appareil : ajoutez à nouveau votre compte.",
-                Toast.LENGTH_LONG,
-            ).show()
-        }
-        if (store.deviceMode == null) {
-            // Premier démarrage : on demande d'abord le type d'appareil.
-            screen = Screen.DeviceSetup(firstLaunch = true)
-        } else {
-            startFlow()
+        viewModelScope.launch {
+            profiles = withContext(storeDispatcher) { store.profiles() }
+            if (store.profilesUnreadable) {
+                Toast.makeText(
+                    app,
+                    "Des profils enregistrés n'ont pas pu être relus sur cet appareil. Ils sont conservés et " +
+                        "seront récupérés automatiquement s'ils redeviennent lisibles ; sinon, ajoutez à nouveau votre compte.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            if (store.deviceMode == null) {
+                // Premier démarrage : on demande d'abord le type d'appareil.
+                screen = Screen.DeviceSetup(firstLaunch = true)
+            } else {
+                startFlow()
+            }
         }
     }
 
@@ -338,11 +349,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * fermeture de l'application, et l'utilisateur est prévenu.
      */
     private fun persistProfiles() {
-        if (!store.saveProfiles(profiles)) {
-            toast(
-                "Stockage sécurisé indisponible : les modifications de profils ne seront pas " +
-                    "conservées après la fermeture de l'application.",
-            )
+        val snapshot = profiles
+        viewModelScope.launch {
+            val saved = withContext(storeDispatcher) { store.saveProfiles(snapshot) }
+            if (!saved) {
+                toast(
+                    "Stockage sécurisé indisponible : les modifications de profils ne seront pas " +
+                        "conservées après la fermeture de l'application.",
+                )
+            }
         }
     }
 
@@ -444,7 +459,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val items = when (categoryId) {
                     CATEGORY_ALL -> loadAll(c, type)
                     CATEGORY_FAV -> favoritesOf(c, type)
-                    else -> categoryCache.getOrPut(type to categoryId) { c.streams(type, categoryId) }
+                    else -> categoryCache[type to categoryId]
+                        ?: c.streams(type, categoryId).also { categoryCache[type to categoryId] = it }
                 }
                 update(type) { it.copy(items = items, loading = false) }
             } catch (e: CancellationException) {
@@ -469,6 +485,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun loadAll(c: XtreamClient, type: ContentType): List<MediaEntry> =
         allCache[type] ?: c.streams(type, null).also { allCache[type] = it }
+
+    /** Recharge le catalogue depuis le serveur (nouvelles chaînes, films ajoutés…). */
+    fun refreshCatalog() {
+        if (client == null) return
+        val home = homeSelected
+        val tab = currentTab
+        resetCatalog()
+        selectTab(tab)
+        homeSelected = home
+    }
 
     private suspend fun favoritesOf(c: XtreamClient, type: ContentType): List<MediaEntry> {
         val ids = favorites[type].orEmpty()
@@ -771,6 +797,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val EPG_TTL_MS = 20 * 60_000L
+        const val CATALOG_TTL_MS = 30 * 60_000L
         const val EPG_RETRY_MS = 2 * 60_000L
     }
+}
+
+/** Cache borné (les entrées les moins récemment utilisées sortent en premier) avec durée de validité. */
+private class TimedCache<K, V>(private val max: Int, private val ttlMs: Long) {
+    private val map = object : LinkedHashMap<K, Pair<Long, V>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, Pair<Long, V>>?) = size > max
+    }
+
+    operator fun get(key: K): V? {
+        val (time, value) = map[key] ?: return null
+        if (System.currentTimeMillis() - time > ttlMs) {
+            map.remove(key)
+            return null
+        }
+        return value
+    }
+
+    operator fun set(key: K, value: V) {
+        map[key] = System.currentTimeMillis() to value
+    }
+
+    fun clear() = map.clear()
 }

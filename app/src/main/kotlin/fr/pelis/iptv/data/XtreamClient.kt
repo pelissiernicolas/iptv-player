@@ -273,25 +273,41 @@ class XtreamClient(val credentials: Credentials) {
          * la plupart des serveurs Xtream n'acceptent que lui ; l'écran du profil le signale.
          */
         fun normalizeServer(input: String): String {
-            var s = input.trim()
+            var s = stripUserInfo(input.trim())
             if (!s.startsWith("http://", true) && !s.startsWith("https://", true)) s = "http://$s"
-            s = s.substringBefore('?').trimEnd('/')
+            s = s.substringBefore('?').substringBefore('#').trimEnd('/')
             for (suffix in listOf("/player_api.php", "/get.php", "/xmltv.php", "/panel_api.php")) {
                 if (s.endsWith(suffix, ignoreCase = true)) s = s.dropLast(suffix.length)
             }
             return s.trimEnd('/')
         }
 
-        /** Extrait serveur / identifiants d'un lien M3U du type get.php?username=..&password=.. */
+        /** Retire d'une adresse les identifiants éventuels « utilisateur:motdepasse@ ». */
+        fun stripUserInfo(input: String): String =
+            input.replace(Regex("^([a-zA-Z][a-zA-Z0-9+.-]*://)?[^/?#@]*@"), "$1")
+
+        /**
+         * Version de ce qui a été saisi dans le champ serveur qui peut être conservée dans
+         * l'état sauvegardé d'Android : sans paramètres (password=…) ni identifiants dans l'adresse.
+         */
+        fun redactServerInput(input: String): String =
+            stripUserInfo(input).substringBefore('?').substringBefore('#')
+
+        /**
+         * Extrait serveur / identifiants d'un lien M3U du type get.php?username=..&password=..
+         * (ou http://utilisateur:motdepasse@serveur/…). Le serveur retourné ne contient jamais d'identifiants.
+         */
         fun parseM3uLink(input: String): Credentials? {
             val url = input.trim().toHttpUrlOrNull() ?: return null
-            val user = url.queryParameter("username")
-            val pass = url.queryParameter("password")
+            val user = url.queryParameter("username") ?: url.username.takeIf { it.isNotEmpty() }
+            val pass = url.queryParameter("password") ?: url.password.takeIf { it.isNotEmpty() }
             if (user.isNullOrBlank() || pass.isNullOrEmpty()) return null
             // On garde un éventuel sous-chemin (ex. https://hote/iptv/get.php -> https://hote/iptv).
             val segments = url.pathSegments.filter { it.isNotEmpty() }
             val baseSegments = if (segments.lastOrNull()?.contains('.') == true) segments.dropLast(1) else segments
             val server = url.newBuilder()
+                .username("")
+                .password("")
                 .query(null)
                 .fragment(null)
                 .encodedPath("/")

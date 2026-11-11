@@ -5,7 +5,10 @@ import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -41,6 +44,9 @@ private fun App(vm: MainViewModel) {
     CompositionLocalProvider(LocalTvMode provides vm.tvMode) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when (val s = vm.screen) {
+            Screen.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
             is Screen.DeviceSetup -> DeviceSetupScreen(vm, s.firstLaunch)
             Screen.Profiles -> ProfilesScreen(vm)
             is Screen.EditProfile -> ProfileEditScreen(vm, s.profile)

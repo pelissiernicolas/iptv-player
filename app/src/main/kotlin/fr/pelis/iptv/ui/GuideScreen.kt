@@ -57,6 +57,8 @@ import fr.pelis.iptv.MainViewModel
 import fr.pelis.iptv.data.EpgProgram
 import fr.pelis.iptv.data.MediaEntry
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 
 private const val HOURS = 8
 private val DP_PER_MINUTE = 4.dp
@@ -75,19 +77,27 @@ fun GuideScreen(vm: MainViewModel) {
     val channels = vm.guideChannels
     val now by rememberNow()
 
-    // Fenêtre : de la demi-heure précédente à +8 h.
-    val windowStart = remember {
-        val n = System.currentTimeMillis()
-        n - n % (30 * MINUTE) - 30 * MINUTE
-    }
+    // Fenêtre : de la demi-heure précédente à +8 h, renouvelée toutes les 30 min si l'écran
+    // reste ouvert. La couverture réelle dépend du guide fourni par le serveur (guide court).
+    val windowStart = remember(now / (30 * MINUTE)) { now - now % (30 * MINUTE) - 30 * MINUTE }
     val windowEnd = windowStart + HOURS * 60 * MINUTE
     val hScroll = rememberScrollState()
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+
+    fun nowOffsetPx(): Int =
+        with(density) { (minutesToDp(System.currentTimeMillis() - windowStart) - 40.dp).toPx() }.toInt().coerceAtLeast(0)
 
     LaunchedEffect(Unit) {
         snapshotFlow { hScroll.maxValue }.first { it > 0 && it < Int.MAX_VALUE }
-        val target = with(density) { (minutesToDp(System.currentTimeMillis() - windowStart) - 40.dp).toPx() }
-        hScroll.scrollTo(target.toInt().coerceAtLeast(0))
+        hScroll.scrollTo(nowOffsetPx())
+    }
+    // Fenêtre décalée de 30 min : on décale aussi le défilement pour garder les mêmes programmes à l'écran.
+    var previousStart by remember { mutableStateOf(windowStart) }
+    LaunchedEffect(windowStart) {
+        val shift = windowStart - previousStart
+        previousStart = windowStart
+        if (shift != 0L) hScroll.scrollTo((hScroll.value - with(density) { minutesToDp(shift).toPx() }.toInt()).coerceAtLeast(0))
     }
 
     var selected by remember { mutableStateOf<Pair<Int, EpgProgram>?>(null) }
@@ -100,6 +110,12 @@ fun GuideScreen(vm: MainViewModel) {
                     IconButton(onClick = vm::closeGuide, modifier = Modifier.tvItem(CircleShape)) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Retour")
                     }
+                },
+                actions = {
+                    TextButton(
+                        onClick = { scope.launch { hScroll.animateScrollTo(nowOffsetPx()) } },
+                        modifier = Modifier.tvItem(CircleShape),
+                    ) { Text("Maintenant") }
                 },
             )
         },
@@ -132,8 +148,9 @@ fun GuideScreen(vm: MainViewModel) {
                             val programs = vm.epg[channel.id]
                             when {
                                 programs == null -> GuideHint("Chargement…")
+                                programs.isEmpty() -> GuideHint("Programmes non fournis par le serveur")
                                 programs.none { it.end > windowStart && it.start < windowEnd } ->
-                                    GuideHint("Pas de programme disponible")
+                                    GuideHint("Pas de programme sur cette période")
                                 else -> programs.filter { it.end > windowStart && it.start < windowEnd }.forEach { p ->
                                     val start = maxOf(p.start, windowStart)
                                     val end = minOf(p.end, windowEnd)

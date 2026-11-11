@@ -18,22 +18,47 @@ class SessionStore(context: Context) {
     var profilesUnreadable = false
         private set
 
-    /** Profils, chiffrés avec [SecretBox] (les anciennes versions les stockaient en clair). */
+    /**
+     * Profils, chiffrés avec [SecretBox] (les anciennes versions les stockaient en clair).
+     * Déchiffrement et écriture : à appeler hors du thread principal.
+     */
     fun profiles(): List<Profile> {
-        val raw = prefs.getString(KEY_PROFILES, null) ?: return migrateLegacy()
-        val list = runCatching {
-            val text = if (SecretBox.isEncrypted(raw)) SecretBox.decrypt(raw) else raw
-            json.decodeFromString<List<Profile>>(text)
-        }.getOrElse {
-            profilesUnreadable = true
-            prefs.edit().putString(KEY_PROFILES_UNREADABLE, raw).remove(KEY_PROFILES).apply()
-            return emptyList()
+        val raw = prefs.getString(KEY_PROFILES, null)
+        var list = when {
+            raw == null -> migrateLegacy()
+            else -> decode(raw) ?: run {
+                // Illisibles : mis de côté sous une clé unique (jamais écrasés par un échec suivant).
+                prefs.edit()
+                    .putString("$KEY_PROFILES_UNREADABLE${System.currentTimeMillis()}", raw)
+                    .remove(KEY_PROFILES)
+                    .commit()
+                emptyList()
+            }
         }
         // Données en clair d'une version précédente : on les chiffre tout de suite
         // (si le chiffrement échoue, elles restent telles quelles et on réessaiera au prochain lancement).
-        if (!SecretBox.isEncrypted(raw)) saveProfiles(list)
+        if (raw != null && list.isNotEmpty() && !SecretBox.isEncrypted(raw)) saveProfiles(list)
+
+        // Profils mis de côté lors d'un échec précédent (Keystore momentanément indisponible…) :
+        // on retente à chaque lancement et on les réintègre dès qu'ils redeviennent lisibles.
+        val aside = prefs.all.keys.filter { it.startsWith(KEY_PROFILES_UNREADABLE.removeSuffix("_")) }
+        val recoveredKeys = mutableListOf<String>()
+        for (key in aside) {
+            val recovered = prefs.getString(key, null)?.let(::decode) ?: continue
+            list = list + recovered.filter { r -> list.none { it.id == r.id } }
+            recoveredKeys += key
+        }
+        if (recoveredKeys.isNotEmpty() && saveProfiles(list)) {
+            prefs.edit().apply { recoveredKeys.forEach(::remove) }.commit()
+        }
+        profilesUnreadable = aside.size > recoveredKeys.size
         return list
     }
+
+    private fun decode(raw: String): List<Profile>? = runCatching {
+        val text = if (SecretBox.isEncrypted(raw)) SecretBox.decrypt(raw) else raw
+        json.decodeFromString<List<Profile>>(text)
+    }.getOrNull()
 
     /**
      * Enregistre les profils chiffrés. Retourne false si le chiffrement est impossible
@@ -93,7 +118,7 @@ class SessionStore(context: Context) {
 
     private companion object {
         const val KEY_PROFILES = "profiles"
-        const val KEY_PROFILES_UNREADABLE = "profiles_unreadable"
+        const val KEY_PROFILES_UNREADABLE = "profiles_unreadable_"
         const val KEY_ACTIVE = "active_profile"
         const val KEY_DEVICE_MODE = "device_mode"
     }

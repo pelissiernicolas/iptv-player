@@ -107,6 +107,16 @@ class PlayerActivity : FragmentActivity() {
     private val fallbackUsed = HashSet<Int>()
     private var resumeIndex = 0
     private var resumePosition = C.TIME_UNSET
+    /** Lecture ou pause voulue par l'utilisateur : conservée quand le lecteur est recréé. */
+    private var playWhenReadyWanted = true
+
+    /**
+     * Activité recréée par Android (processus arrêté en arrière-plan…) : si un Chromecast lit
+     * déjà ce contenu, on rejoint sa lecture au lieu de recharger la file sur la TV.
+     */
+    private var restoring = false
+    private var pendingCastJoin = false
+    private val castJoinTimeout = Runnable { finishCastJoin(timedOut = true) }
 
     /** Pour la touche « chaîne précédente ». */
     private var currentIndex = -1
@@ -140,6 +150,7 @@ class PlayerActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        restoring = savedInstanceState != null
         Library.init(this)
         tvMode = SessionStore(this).deviceMode == DEVICE_TV
         if (PlaylistHolder.current == null && savedInstanceState != null) {
@@ -307,6 +318,9 @@ class PlayerActivity : FragmentActivity() {
         if (!::playerView.isInitialized) return
         saveProgress()
         if (!loadPlaylist()) return
+        // Nouvelle demande de lecture : elle remplace ce que lit le Chromecast.
+        restoring = false
+        cancelCastJoin()
         val p = player
         if (casting) {
             loadOnCast(resumeIndex, resumePosition)
@@ -331,6 +345,7 @@ class PlayerActivity : FragmentActivity() {
         resumeIndex = (saved?.getInt(STATE_INDEX, session.startIndex) ?: session.startIndex).coerceIn(0, items.lastIndex)
         resumePosition = (saved?.getLong(STATE_POSITION, session.startPositionMs) ?: session.startPositionMs)
             .takeIf { it > 0 } ?: C.TIME_UNSET
+        playWhenReadyWanted = saved?.getBoolean(STATE_PLAYING, true) ?: true
         currentIndex = -1
         previousIndex = -1
         if (::lastChannelButton.isInitialized) updateLastChannelButton()
@@ -346,6 +361,7 @@ class PlayerActivity : FragmentActivity() {
         val position = if (p != null && p.mediaItemCount > 0) p.currentPosition else resumePosition
         outState.putInt(STATE_INDEX, index)
         outState.putLong(STATE_POSITION, if (items.getOrNull(index)?.isLive == true) -1 else position)
+        outState.putBoolean(STATE_PLAYING, p?.playWhenReady ?: playWhenReadyWanted)
     }
 
     override fun onStart() {
@@ -356,10 +372,64 @@ class PlayerActivity : FragmentActivity() {
     private fun startPlayback() {
         if (items.isEmpty() || !::playerView.isInitialized) return
         if (casting) {
-            if (playerView.player == null) loadOnCast(resumeIndex, resumePosition)
+            if (playerView.player == null) {
+                if (restoring) startCastJoin() else loadOnCast(resumeIndex, resumePosition)
+            }
         } else if (player == null) {
             initializePlayer()
         }
+        restoring = false
+    }
+
+    // ---------- Reconnexion à une lecture Cast en cours ----------
+
+    /**
+     * Rejoint la file du Chromecast si elle correspond à notre liste. L'état de la TV peut
+     * arriver quelques instants après la création du CastPlayer : on l'attend au plus
+     * [CAST_JOIN_TIMEOUT_MS] avant de décider.
+     */
+    private fun startCastJoin() {
+        val c = castPlayer ?: return
+        playerView.player = c
+        castBanner.visibility = View.VISIBLE
+        updateCastBanner(resumeIndex)
+        if (tryJoinCastQueue()) return
+        pendingCastJoin = true
+        handler.removeCallbacks(castJoinTimeout)
+        handler.postDelayed(castJoinTimeout, CAST_JOIN_TIMEOUT_MS)
+    }
+
+    private fun tryJoinCastQueue(): Boolean {
+        val c = castPlayer ?: return false
+        if (c.mediaItemCount == 0) return false
+        val remote = (0 until c.mediaItemCount).map { c.getMediaItemAt(it).localConfiguration?.uri?.toString() }
+        val offset = castQueueOffset(remote, items.map(::castMediaItemUrl)) ?: return false
+        castOffset = offset
+        pendingCastJoin = false
+        handler.removeCallbacks(castJoinTimeout)
+        rememberCastState()
+        onItemChanged()
+        handler.removeCallbacks(progressSaver)
+        handler.postDelayed(progressSaver, 5_000)
+        return true
+    }
+
+    /** Délai écoulé : TV inactive -> on y relance notre contenu ; autre contenu -> on n'y touche pas. */
+    private fun finishCastJoin(timedOut: Boolean) {
+        if (!pendingCastJoin || !casting) return
+        if (tryJoinCastQueue() || !timedOut) return
+        pendingCastJoin = false
+        val c = castPlayer ?: return
+        if (c.mediaItemCount == 0) {
+            loadOnCast(resumeIndex, resumePosition)
+        } else {
+            castBanner.text = "Le Chromecast lit un autre contenu : il n'a pas été remplacé."
+        }
+    }
+
+    private fun cancelCastJoin() {
+        pendingCastJoin = false
+        handler.removeCallbacks(castJoinTimeout)
     }
 
     override fun onStop() {
@@ -371,6 +441,7 @@ class PlayerActivity : FragmentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(progressSaver)
+        handler.removeCallbacks(castJoinTimeout)
         runCatching { unregisterReceiver(pipReceiver) }
         castPlayer?.let {
             it.setSessionAvailabilityListener(null)
@@ -412,7 +483,7 @@ class PlayerActivity : FragmentActivity() {
             .build()
         exo.addListener(listener)
         exo.setMediaItems(items.indices.map { mediaItem(it) }, resumeIndex, resumePosition)
-        exo.playWhenReady = true
+        exo.playWhenReady = playWhenReadyWanted
         exo.prepare()
         playerView.player = exo
         player = exo
@@ -427,6 +498,7 @@ class PlayerActivity : FragmentActivity() {
         saveProgress()
         resumeIndex = p.currentMediaItemIndex
         resumePosition = if (items.getOrNull(resumeIndex)?.isLive == true) C.TIME_UNSET else p.currentPosition
+        playWhenReadyWanted = p.playWhenReady
         p.removeListener(listener)
         p.release()
         player = null
@@ -445,11 +517,13 @@ class PlayerActivity : FragmentActivity() {
             local?.let { rememberAudioFormat(index, it) }
             releasePlayer()
             casting = true
+            cancelCastJoin()
             loadOnCast(index, position)
         }
 
         override fun onCastSessionUnavailable() {
             if (!casting) return
+            cancelCastJoin()
             rememberCastState()
             saveProgress()
             handler.removeCallbacks(progressSaver)
@@ -458,6 +532,7 @@ class PlayerActivity : FragmentActivity() {
             playerView.player = null
             resumeIndex = lastCastIndex.coerceIn(0, items.lastIndex)
             resumePosition = if (items[resumeIndex].isLive) C.TIME_UNSET else lastCastPosition
+            playWhenReadyWanted = true
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) initializePlayer()
         }
     }
@@ -485,6 +560,7 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private fun rememberCastState() {
+        if (pendingCastJoin) return
         val c = castPlayer ?: return
         if (c.mediaItemCount == 0) return
         lastCastIndex = c.currentMediaItemIndex + castOffset
@@ -574,9 +650,14 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private val listener = object : Player.Listener {
+        override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+            // État du Chromecast reçu : on peut décider de rejoindre sa lecture.
+            if (pendingCastJoin && casting) finishCastJoin(timedOut = false)
+        }
+
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             // Épisode terminé et enchaîné automatiquement : il sort de « Continuer à regarder ».
-            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) markFinished(currentIndex)
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && !pendingCastJoin) markFinished(currentIndex)
             onItemChanged()
         }
 
@@ -666,6 +747,8 @@ class PlayerActivity : FragmentActivity() {
 
     /** Appelé à chaque changement de chaîne / vidéo. */
     private fun onItemChanged() {
+        // File du Chromecast pas encore rapprochée de notre liste : index inconnu.
+        if (pendingCastJoin) return
         val index = activeIndex() ?: return
         if (index != currentIndex) {
             if (currentIndex >= 0) previousIndex = currentIndex
@@ -734,6 +817,7 @@ class PlayerActivity : FragmentActivity() {
 
     /** Mémorise la position du film / épisode en cours pour « Continuer à regarder ». */
     private fun saveProgress() {
+        if (pendingCastJoin) return
         val p = active ?: return
         if (p.mediaItemCount == 0) return
         val item = items.getOrNull(activeIndex() ?: return) ?: return
@@ -907,6 +991,8 @@ class PlayerActivity : FragmentActivity() {
         }
         const val STATE_INDEX = "player_index"
         const val STATE_POSITION = "player_position"
+        const val STATE_PLAYING = "player_playing"
+        const val CAST_JOIN_TIMEOUT_MS = 3_000L
 
         /** Formats audio que le récepteur Cast par défaut ne décode pas dans un fichier (MKV, MP4…). */
         val CAST_UNSUPPORTED_AUDIO = mapOf(
