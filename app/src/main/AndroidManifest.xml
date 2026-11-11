@@ -47,8 +47,7 @@
             android:launchMode="singleTask"
             android:resizeableActivity="true"
             android:screenOrientation="sensorLandscape"
-            android:supportsPictureInPicture="true"
-            android:taskAffinity="fr.pelis.iptv.player" />
+            android:supportsPictureInPicture="true" />
 
         <receiver
             android:name=".update.UpdateResultReceiver"

@@ -331,6 +331,22 @@ class PlayerActivity : FragmentActivity() {
         )
     }
 
+    /**
+     * Le lecteur vit dans la tâche de l'application, au-dessus de l'accueil. Seul cas où il se
+     * retrouve seul dans sa tâche : après un passage en PiP (Android l'en sort). En le quittant,
+     * on ramène alors l'application au premier plan au lieu de retomber sur le bureau Android.
+     */
+    private var closedFromPip = false
+
+    override fun finish() {
+        if (isTaskRoot && !closedFromPip && !isChangingConfigurations) {
+            packageManager.getLaunchIntentForPackage(packageName)?.let { home ->
+                runCatching { startActivity(home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }
+        }
+        super.finish()
+    }
+
     /** Nouvelle chaîne / vidéo lancée alors que le lecteur est déjà ouvert (ex. en PiP). */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -996,7 +1012,8 @@ class PlayerActivity : FragmentActivity() {
             playerView.hideController()
             topBar.visibility = View.GONE
         } else if (lifecycle.currentState == Lifecycle.State.CREATED) {
-            // La fenêtre PiP a été fermée par l'utilisateur.
+            // La fenêtre PiP a été fermée par l'utilisateur : on ferme sans rouvrir l'application.
+            closedFromPip = true
             finishAndRemoveTask()
         } else {
             hideSystemUi()

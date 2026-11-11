@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -77,7 +78,7 @@ fun DeviceSetupScreen(vm: MainViewModel, firstLaunch: Boolean) {
                 subtitle = "Android TV, Google TV, box TV\nNavigation à la télécommande",
                 detected = vm.detectedTv,
                 selected = !firstLaunch && vm.tvMode,
-                modifier = Modifier.focusRequester(tvFocus),
+                modifier = Modifier.fillMaxRowHeight().focusRequester(tvFocus),
                 onClick = { vm.chooseDeviceMode(tv = true) },
             )
             DeviceOption(
@@ -86,7 +87,7 @@ fun DeviceSetupScreen(vm: MainViewModel, firstLaunch: Boolean) {
                 subtitle = "Écran tactile\nPicture-in-Picture et Chromecast",
                 detected = !vm.detectedTv,
                 selected = !firstLaunch && !vm.tvMode,
-                modifier = Modifier.focusRequester(mobileFocus),
+                modifier = Modifier.fillMaxRowHeight().focusRequester(mobileFocus),
                 onClick = { vm.chooseDeviceMode(tv = false) },
             )
         }
@@ -124,12 +125,17 @@ private fun DeviceOption(
         modifier = modifier.width(260.dp).tvFocusAlways(shape),
     ) {
         Column(
-            Modifier.padding(24.dp),
+            Modifier.fillMaxWidth().padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Icon(icon, null, Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary)
-            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+            )
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall,
