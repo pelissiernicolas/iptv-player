@@ -158,6 +158,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
       - name: Télécharger l'APK signé
         uses: actions/download-artifact@v5
         with:
@@ -172,7 +175,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          gh release create "$GITHUB_REF_NAME" \
-            release/*.apk \
-            --title "IPTV Player $GITHUB_REF_NAME" \
-            --generate-notes
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Nom attendu par la mise à jour intégrée (IPTV-Player-<version>.apk).
+          APK="release/IPTV-Player-${VERSION}.apk"
+          mv release/*.apk "$APK"
+
+          # Notes rédigées dans release-notes/<version>.md :
+          # 1re ligne « # Titre », puis le texte affiché dans la release et dans l'application.
+          NOTES="release-notes/${VERSION}.md"
+          if [ -f "$NOTES" ]; then
+            TITLE="IPTV Player ${VERSION} – $(head -n1 "$NOTES" | sed 's/^# *//')"
+            tail -n +2 "$NOTES" > body.md
+            {
+              echo
+              echo "Téléchargez **IPTV-Player-${VERSION}.apk** ci-dessous, ou acceptez la mise à jour proposée dans l'application."
+            } >> body.md
+            gh release create "$GITHUB_REF_NAME" "$APK" --title "$TITLE" --notes-file body.md
+          else
+            echo "::warning::$NOTES absent : notes générées automatiquement"
+            gh release create "$GITHUB_REF_NAME" "$APK" --title "IPTV Player ${VERSION}" --generate-notes
+          fi
