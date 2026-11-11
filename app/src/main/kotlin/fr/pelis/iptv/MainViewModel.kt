@@ -87,6 +87,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Catalogue
     /** true = onglet « Accueil » affiché, sinon l'onglet [currentTab]. */
     var homeSelected by mutableStateOf(false); private set
+    /** Mode TV : dernier élément de l'accueil qui avait le focus (rendu au retour d'une fiche). */
+    var lastFocusedItemKey: String? = null
     var currentTab by mutableStateOf(ContentType.LIVE); private set
     val tabStates = mutableStateMapOf<ContentType, TabState>()
     val favorites = mutableStateMapOf<ContentType, Set<String>>()
@@ -405,6 +407,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun resetCatalog() {
+        lastFocusedItemKey = null
         loadJobs.values.forEach { it.cancel() }
         loadJobs.clear()
         searchJob?.cancel()

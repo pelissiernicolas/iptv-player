@@ -85,3 +85,12 @@ class SensitiveInputTest {
         assertEquals("http://exemple.com", XtreamClient.normalizeServer("bob:pw@exemple.com"))
     }
 }
+
+class UniqueKeysTest {
+    @Test
+    fun duplicatesGetDistinctStableKeys() {
+        val keys = fr.pelis.iptv.ui.uniqueKeys(listOf("live:1", "live:2", "live:1", "live:1"))
+        assertEquals(listOf("live:1", "live:2", "live:1#2", "live:1#3"), keys)
+        assertEquals(keys.size, keys.toSet().size)
+    }
+}

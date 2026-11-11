@@ -29,3 +29,16 @@ fun rememberNow(): State<Long> = produceState(System.currentTimeMillis()) {
         value = System.currentTimeMillis()
     }
 }
+
+/**
+ * Clés uniques pour une liste paresseuse (Lazy*) : certains fournisseurs listent deux fois
+ * le même flux, et une clé en double ferait planter la liste. Le 2e "live:12" devient "live:12#2".
+ */
+fun uniqueKeys(base: List<String>): List<String> {
+    val seen = HashMap<String, Int>()
+    return base.map { k ->
+        val n = (seen[k] ?: 0) + 1
+        seen[k] = n
+        if (n == 1) k else "$k#$n"
+    }
+}

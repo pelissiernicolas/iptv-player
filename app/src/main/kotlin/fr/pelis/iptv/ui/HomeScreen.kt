@@ -130,8 +130,17 @@ fun HomeScreen(vm: MainViewModel) {
     val home = vm.homeSelected
     val tv = vm.tvMode
     val navFocus = remember { FocusRequester() }
-    // Télécommande : focus initial sur le menu latéral pour pouvoir naviguer tout de suite.
-    if (tv) LaunchedEffect(Unit) { runCatching { navFocus.requestFocus() } }
+    // Télécommande : au retour d'une fiche, le focus revient sur l'élément quitté ;
+    // sinon (ou s'il n'est plus affiché) focus initial sur le menu latéral.
+    val focusMemory = LocalFocusMemory.current
+    if (tv) LaunchedEffect(Unit) {
+        if (focusMemory?.pending != null) {
+            kotlinx.coroutines.delay(800)
+            if (focusMemory.pending == null) return@LaunchedEffect
+            focusMemory.pending = null
+        }
+        runCatching { navFocus.requestFocus() }
+    }
     val loading = if (searchMode) vm.searching || vm.searchResults == null else state.loading
 
     Scaffold(
@@ -350,12 +359,14 @@ private fun ChannelList(
     onLongClick: (MediaEntry) -> Unit,
 ) {
     val now by rememberNow()
+    val keys = remember(items) { uniqueKeys(items.map { "live:${it.id}" }) }
     LazyColumn(contentPadding = PaddingValues(vertical = 4.dp)) {
-        itemsIndexed(items) { index, entry ->
+        itemsIndexed(items, key = { i, _ -> keys[i] }) { index, entry ->
             LaunchedEffect(entry.id) { loadEpg(entry) }
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .rememberFocus(keys[index])
                     .tvItem(onLongPress = { onLongClick(entry) })
                     .combinedClickable(onClick = { onClick(index) }, onLongClick = { onLongClick(entry) })
                     .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -396,15 +407,17 @@ private fun PosterGrid(
     onClick: (MediaEntry) -> Unit,
     onLongClick: (MediaEntry) -> Unit,
 ) {
+    val keys = remember(items) { uniqueKeys(items.map { "${it.type}:${it.id}" }) }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(if (LocalTvMode.current) 140.dp else 112.dp),
         contentPadding = PaddingValues(12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        itemsIndexed(items) { _, entry ->
+        itemsIndexed(items, key = { i, _ -> keys[i] }) { index, entry ->
             Column(
                 Modifier
+                    .rememberFocus(keys[index])
                     .tvItem(onLongPress = { onLongClick(entry) })
                     .clip(RoundedCornerShape(8.dp))
                     .combinedClickable(onClick = { onClick(entry) }, onLongClick = { onLongClick(entry) }),
@@ -590,6 +603,7 @@ private fun HomeTab(vm: MainViewModel, modifier: Modifier) {
                         Column(
                             Modifier
                                 .width(124.dp)
+                                .rememberFocus("cw:${p.key}")
                                 .tvItem(onLongPress = { vm.removeProgress(p.key) })
                                 .clip(RoundedCornerShape(8.dp))
                                 .combinedClickable(
@@ -647,11 +661,12 @@ private fun HomeTab(vm: MainViewModel, modifier: Modifier) {
         }
         if (recents.isNotEmpty()) {
             item { SectionTitle("Chaînes récentes") }
-            itemsIndexed(recents.take(10)) { index, entry ->
+            itemsIndexed(recents.take(10), key = { _, e -> "rec:${e.id}" }) { index, entry ->
                 LaunchedEffect(entry.id) { vm.loadEpg(entry) }
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .rememberFocus("rec:${entry.id}")
                         .tvItem()
                         .combinedClickable(onClick = { vm.playLive(context, recents, index) })
                         .padding(horizontal = 16.dp, vertical = 8.dp),

@@ -18,6 +18,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import fr.pelis.iptv.ui.DeviceSetupScreen
 import fr.pelis.iptv.ui.GuideScreen
 import fr.pelis.iptv.ui.LocalTvMode
+import fr.pelis.iptv.ui.FocusMemory
+import fr.pelis.iptv.ui.LocalFocusMemory
+import androidx.compose.runtime.remember
 import fr.pelis.iptv.ui.HomeScreen
 import fr.pelis.iptv.ui.IptvTheme
 import fr.pelis.iptv.ui.MovieScreen
@@ -50,7 +53,11 @@ private fun App(vm: MainViewModel) {
             is Screen.DeviceSetup -> DeviceSetupScreen(vm, s.firstLaunch)
             Screen.Profiles -> ProfilesScreen(vm)
             is Screen.EditProfile -> ProfileEditScreen(vm, s.profile)
-            Screen.Home -> stateHolder.SaveableStateProvider("home:${vm.activeProfile?.id}") { HomeScreen(vm) }
+            Screen.Home -> stateHolder.SaveableStateProvider("home:${vm.activeProfile?.id}") {
+                // Focus rendu à l'élément quitté au retour d'une fiche (mode TV).
+                val memory = remember { FocusMemory(vm.lastFocusedItemKey) { vm.lastFocusedItemKey = it } }
+                CompositionLocalProvider(LocalFocusMemory provides memory) { HomeScreen(vm) }
+            }
             is Screen.Series -> SeriesScreen(vm, s.entry)
             is Screen.Movie -> MovieScreen(vm, s.entry)
             Screen.Guide -> GuideScreen(vm)
