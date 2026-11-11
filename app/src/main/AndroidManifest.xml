@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Mise à jour automatique depuis les releases GitHub -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Compatible téléphones, tablettes et Android TV -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -45,5 +47,9 @@
             android:screenOrientation="sensorLandscape"
             android:supportsPictureInPicture="true"
             android:taskAffinity="fr.pelis.iptv.player" />
+
+        <receiver
+            android:name=".update.UpdateResultReceiver"
+            android:exported="false" />
     </application>
 </manifest>

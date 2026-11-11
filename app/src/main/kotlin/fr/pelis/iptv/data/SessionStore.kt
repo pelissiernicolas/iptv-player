@@ -29,6 +29,11 @@ class SessionStore(context: Context) {
         get() = prefs.getString(KEY_DEVICE_MODE, null)
         set(value) = prefs.edit().putString(KEY_DEVICE_MODE, value).apply()
 
+    /** Version de mise à jour que l'utilisateur a choisi d'ignorer. */
+    var skippedUpdateVersion: String?
+        get() = prefs.getString("skipped_update", null)
+        set(value) = prefs.edit().putString("skipped_update", value).apply()
+
     fun favorites(profileId: String, type: ContentType): Set<String> =
         prefs.getStringSet(favKey(profileId, type), emptySet())?.toSet() ?: emptySet()
 

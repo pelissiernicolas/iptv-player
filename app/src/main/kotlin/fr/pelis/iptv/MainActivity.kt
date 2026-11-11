@@ -21,6 +21,7 @@ import fr.pelis.iptv.ui.MovieScreen
 import fr.pelis.iptv.ui.ProfileEditScreen
 import fr.pelis.iptv.ui.ProfilesScreen
 import fr.pelis.iptv.ui.SeriesScreen
+import fr.pelis.iptv.ui.UpdateDialog
 
 // FragmentActivity : requis par le bouton Cast (boîte de dialogue de choix d'appareil).
 class MainActivity : FragmentActivity() {
@@ -48,6 +49,7 @@ private fun App(vm: MainViewModel) {
             is Screen.Movie -> MovieScreen(vm, s.entry)
             Screen.Guide -> GuideScreen(vm)
         }
+        UpdateDialog(vm)
     }
     }
 }

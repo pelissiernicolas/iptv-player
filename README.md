@@ -16,6 +16,7 @@ Lecteur IPTV pour Android (téléphone, tablette et Android TV) compatible avec 
 - **Zapping** : boutons suivant/précédent, touches CH+/CH- et « dernière chaîne » de la télécommande
 - **Picture-in-Picture** avec commandes lecture/pause et chaîne suivante/précédente
 - **Android TV** : au premier démarrage, choix Téléviseur ou Smartphone / tablette ; en mode TV, navigation complète à la télécommande (focus visible, menu latéral, appui long sur OK pour les favoris, zapping haut/bas)
+- **Mise à jour automatique** : au démarrage (ou depuis le menu Compte), l'application vérifie la dernière release GitHub, la télécharge et lance l'installateur Android
 - **Chromecast** : envoi de la lecture vers la TV (récepteur Google par défaut) et retour sur le téléphone à la même position
 
 ## Stack

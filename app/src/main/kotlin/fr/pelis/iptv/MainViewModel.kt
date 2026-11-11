@@ -25,6 +25,9 @@ import fr.pelis.iptv.data.XtreamException
 import fr.pelis.iptv.player.PlayItem
 import fr.pelis.iptv.player.PlaylistHolder
 import fr.pelis.iptv.ui.isTvDevice
+import fr.pelis.iptv.update.UpdateInfo
+import fr.pelis.iptv.update.Updater
+import android.widget.Toast
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -129,6 +132,85 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             startFlow()
         }
+    }
+
+    // ---------- Mise à jour de l'application ----------
+
+    val appVersion: String = Updater.currentVersion(app)
+    /** Mise à jour proposée (fenêtre affichée tant que non null). */
+    var update by mutableStateOf<UpdateInfo?>(null); private set
+    /** Progression du téléchargement (0..1), null si aucun téléchargement en cours. */
+    var updateProgress by mutableStateOf<Float?>(null); private set
+    var updateError by mutableStateOf<String?>(null); private set
+    var checkingUpdate by mutableStateOf(false); private set
+    private var updateJob: Job? = null
+
+    init {
+        // Après la déclaration des propriétés ci-dessus (ordre d'initialisation Kotlin).
+        checkForUpdate(manual = false)
+    }
+
+    /** [manual] = demandé depuis le menu : on signale aussi « déjà à jour » et les erreurs. */
+    fun checkForUpdate(manual: Boolean) {
+        if (checkingUpdate) return
+        checkingUpdate = true
+        viewModelScope.launch {
+            try {
+                val info = Updater.checkLatest(appVersion)
+                when {
+                    info == null -> if (manual) toast("Vous avez la dernière version ($appVersion)")
+                    !manual && info.version == store.skippedUpdateVersion -> Unit
+                    else -> {
+                        updateError = null
+                        update = info
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (manual) toast("Impossible de vérifier les mises à jour : ${e.message ?: e.javaClass.simpleName}")
+            } finally {
+                checkingUpdate = false
+            }
+        }
+    }
+
+    /** Télécharge puis installe la mise à jour (demande d'abord l'autorisation d'installer si besoin). */
+    fun startUpdate(context: Context) {
+        val info = update ?: return
+        if (!Updater.canInstall(context)) {
+            updateError = "Autorisez IPTV Player à installer des applications, puis appuyez de nouveau sur « Mettre à jour »."
+            Updater.openInstallPermissionSettings(context)
+            return
+        }
+        if (updateJob?.isActive == true) return
+        updateError = null
+        updateProgress = 0f
+        updateJob = viewModelScope.launch {
+            try {
+                val apk = Updater.download(getApplication(), info) { updateProgress = it }
+                Updater.install(getApplication(), apk)
+                update = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                updateError = "Échec du téléchargement : ${e.message ?: e.javaClass.simpleName}"
+            } finally {
+                updateProgress = null
+            }
+        }
+    }
+
+    fun dismissUpdate(skipThisVersion: Boolean) {
+        updateJob?.cancel()
+        if (skipThisVersion) store.skippedUpdateVersion = update?.version
+        update = null
+        updateProgress = null
+        updateError = null
+    }
+
+    private fun toast(message: String) {
+        Toast.makeText(getApplication(), message, Toast.LENGTH_LONG).show()
     }
 
     /** Ouvre le profil actif, sinon le choix / la création de profil. */

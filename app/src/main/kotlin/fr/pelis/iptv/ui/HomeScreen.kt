@@ -282,6 +282,9 @@ fun HomeScreen(vm: MainViewModel) {
             onSwitchProfile = { showAccount = false; vm.switchProfile() },
             tvMode = tv,
             onChangeDevice = { showAccount = false; vm.openDeviceSetup() },
+            appVersion = vm.appVersion,
+            checkingUpdate = vm.checkingUpdate,
+            onCheckUpdate = { showAccount = false; vm.checkForUpdate(manual = true) },
             onDismiss = { showAccount = false },
         )
     }
@@ -458,6 +461,9 @@ private fun AccountDialog(
     onSwitchProfile: () -> Unit,
     tvMode: Boolean,
     onChangeDevice: () -> Unit,
+    appVersion: String,
+    checkingUpdate: Boolean,
+    onCheckUpdate: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -480,6 +486,10 @@ private fun AccountDialog(
                 InfoRow("Appareil", if (tvMode) "Téléviseur" else "Smartphone / tablette")
                 TextButton(onClick = onChangeDevice, contentPadding = PaddingValues(0.dp)) {
                     Text("Changer le type d'appareil")
+                }
+                InfoRow("Application", "IPTV Player $appVersion")
+                TextButton(onClick = onCheckUpdate, enabled = !checkingUpdate, contentPadding = PaddingValues(0.dp)) {
+                    Text(if (checkingUpdate) "Recherche en cours…" else "Rechercher une mise à jour")
                 }
             }
         },
