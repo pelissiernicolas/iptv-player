@@ -60,6 +60,7 @@ object PlaylistHolder {
     private val json = Json { ignoreUnknownKeys = true }
     private val writer = Executors.newSingleThreadExecutor()
 
+    @Volatile
     var current: PlaySession? = null
         private set
 
@@ -67,15 +68,36 @@ object PlaylistHolder {
         if (items.isEmpty()) return
         val session = PlaySession(profileId, items, startIndex.coerceIn(0, items.lastIndex), startPositionMs)
         current = session
-        val file = File(context.noBackupFilesDir, FILE_NAME)
-        writer.execute {
-            runCatching { file.writeText(SecretBox.encrypt(json.encodeToString(session))) }
-                .onFailure { file.delete() }
-        }
+        val dir = context.noBackupFilesDir
+        writer.execute { persist(dir, session) }
         context.startActivity(Intent(context, PlayerActivity::class.java))
     }
 
-    /** Session en mémoire, ou relue depuis l'appareil après l'arrêt du processus. */
+    /**
+     * Écriture atomique : fichier temporaire puis renommage. Une interruption (processus
+     * arrêté, batterie…) laisse l'ancienne session intacte au lieu d'un fichier tronqué.
+     */
+    private fun persist(dir: File, session: PlaySession) {
+        val target = File(dir, FILE_NAME)
+        val tmp = File(dir, "$FILE_NAME.tmp")
+        val ok = runCatching {
+            tmp.outputStream().use { out ->
+                out.write(SecretBox.encrypt(json.encodeToString(session)).toByteArray(Charsets.UTF_8))
+                out.fd.sync()
+            }
+            tmp.renameTo(target)
+        }.getOrDefault(false)
+        // Échec (chiffrement impossible…) : pas de session restaurable plutôt qu'une session périmée.
+        if (!ok) {
+            tmp.delete()
+            target.delete()
+        }
+    }
+
+    /**
+     * Session en mémoire, ou relue depuis l'appareil après l'arrêt du processus.
+     * Lecture de fichier et déchiffrement : à appeler hors du thread principal.
+     */
     fun restore(context: Context): PlaySession? = current ?: runCatching {
         val file = File(context.noBackupFilesDir, FILE_NAME)
         json.decodeFromString<PlaySession>(SecretBox.decrypt(file.readText()))

@@ -29,16 +29,20 @@ class SessionStore(context: Context) {
             prefs.edit().putString(KEY_PROFILES_UNREADABLE, raw).remove(KEY_PROFILES).apply()
             return emptyList()
         }
-        // Données en clair d'une version précédente : on les chiffre tout de suite.
+        // Données en clair d'une version précédente : on les chiffre tout de suite
+        // (si le chiffrement échoue, elles restent telles quelles et on réessaiera au prochain lancement).
         if (!SecretBox.isEncrypted(raw)) saveProfiles(list)
         return list
     }
 
-    fun saveProfiles(list: List<Profile>) {
-        val text = json.encodeToString(list)
-        // Keystore indisponible (très rare) : on garde le fonctionnement précédent plutôt que de tout perdre.
-        val stored = runCatching { SecretBox.encrypt(text) }.getOrDefault(text)
-        prefs.edit().putString(KEY_PROFILES, stored).commit()
+    /**
+     * Enregistre les profils chiffrés. Retourne false si le chiffrement est impossible
+     * (Android Keystore indisponible) : rien n'est alors écrit, les identifiants ne sont
+     * jamais enregistrés en clair et les données déjà présentes sont conservées.
+     */
+    fun saveProfiles(list: List<Profile>): Boolean {
+        val stored = runCatching { SecretBox.encrypt(json.encodeToString(list)) }.getOrNull() ?: return false
+        return prefs.edit().putString(KEY_PROFILES, stored).commit()
     }
 
     var activeProfileId: String?
@@ -73,21 +77,18 @@ class SessionStore(context: Context) {
         val server = prefs.getString("server", null)
         val user = prefs.getString("username", null)
         val pass = prefs.getString("password", null)
-        val list = if (server != null && user != null && pass != null) {
-            val p = Profile(UUID.randomUUID().toString(), "Mon IPTV", server, user, pass)
-            val edit = prefs.edit()
-            ContentType.entries.forEach { t ->
-                prefs.getStringSet("fav_${t.name}", null)?.let { edit.putStringSet(favKey(p.id, t), it.toSet()) }
-                edit.remove("fav_${t.name}")
-            }
-            if (prefs.getBoolean("logged_in", false)) edit.putString(KEY_ACTIVE, p.id)
-            edit.remove("server").remove("username").remove("password").remove("logged_in").apply()
-            listOf(p)
-        } else {
-            emptyList()
+        if (server == null || user == null || pass == null) return emptyList()
+        val p = Profile(UUID.randomUUID().toString(), "Mon IPTV", server, user, pass)
+        // Anciennes données effacées seulement si le profil a bien été enregistré chiffré.
+        if (!saveProfiles(listOf(p))) return listOf(p)
+        val edit = prefs.edit()
+        ContentType.entries.forEach { t ->
+            prefs.getStringSet("fav_${t.name}", null)?.let { edit.putStringSet(favKey(p.id, t), it.toSet()) }
+            edit.remove("fav_${t.name}")
         }
-        saveProfiles(list)
-        return list
+        if (prefs.getBoolean("logged_in", false)) edit.putString(KEY_ACTIVE, p.id)
+        edit.remove("server").remove("username").remove("password").remove("logged_in").apply()
+        return listOf(p)
     }
 
     private companion object {

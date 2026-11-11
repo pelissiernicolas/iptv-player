@@ -34,6 +34,10 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -138,12 +142,28 @@ class PlayerActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         Library.init(this)
         tvMode = SessionStore(this).deviceMode == DEVICE_TV
-        // savedInstanceState != null : activité recréée (ex. après l'arrêt du processus en arrière-plan).
+        if (PlaylistHolder.current == null && savedInstanceState != null) {
+            // Activité recréée après l'arrêt du processus : la liste (fichier chiffré) est
+            // relue et déchiffrée hors du thread principal, puis le lecteur est construit.
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) { PlaylistHolder.restore(applicationContext) }
+                if (!loadPlaylist(savedInstanceState)) {
+                    finish()
+                    return@launch
+                }
+                setupUi()
+                if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) startPlayback()
+            }
+            return
+        }
         if (!loadPlaylist(savedInstanceState)) {
             finish()
             return
         }
+        setupUi()
+    }
 
+    private fun setupUi() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
@@ -283,6 +303,8 @@ class PlayerActivity : FragmentActivity() {
     /** Nouvelle chaîne / vidéo lancée alors que le lecteur est déjà ouvert (ex. en PiP). */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // Lecteur encore en cours de restauration : il chargera la session la plus récente.
+        if (!::playerView.isInitialized) return
         saveProgress()
         if (!loadPlaylist()) return
         val p = player
@@ -299,7 +321,8 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private fun loadPlaylist(saved: Bundle? = null): Boolean {
-        val session = (if (saved != null) PlaylistHolder.restore(this) else PlaylistHolder.current) ?: return false
+        // Jamais de lecture de fichier ici : la session a déjà été restaurée (hors thread principal) si besoin.
+        val session = PlaylistHolder.current ?: return false
         if (session.items.isEmpty()) return false
         items = session.items
         profileId = session.profileId
@@ -327,7 +350,11 @@ class PlayerActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (items.isEmpty()) return
+        startPlayback()
+    }
+
+    private fun startPlayback() {
+        if (items.isEmpty() || !::playerView.isInitialized) return
         if (casting) {
             if (playerView.player == null) loadOnCast(resumeIndex, resumePosition)
         } else if (player == null) {

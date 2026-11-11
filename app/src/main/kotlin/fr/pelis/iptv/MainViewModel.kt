@@ -311,7 +311,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val info = XtreamClient(profile.credentials()).login()
                 profiles = if (editing != null) profiles.map { if (it.id == profile.id) profile else it }
                 else profiles + profile
-                store.saveProfiles(profiles)
+                persistProfiles()
                 activate(profile, info)
             } catch (e: CancellationException) {
                 throw e
@@ -325,15 +325,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteProfile(profile: Profile) {
         profiles = profiles.filterNot { it.id == profile.id }
-        store.saveProfiles(profiles)
+        persistProfiles()
         store.deleteProfileData(profile.id)
         Library.deleteProfileData(profile.id)
         if (store.activeProfileId == profile.id) store.activeProfileId = null
         if (profiles.isEmpty()) screen = Screen.EditProfile(null)
     }
 
+    /**
+     * Enregistre les profils chiffrés. Si le stockage sécurisé est indisponible, rien n'est
+     * écrit (jamais d'identifiants en clair) : les profils restent utilisables jusqu'à la
+     * fermeture de l'application, et l'utilisateur est prévenu.
+     */
+    private fun persistProfiles() {
+        if (!store.saveProfiles(profiles)) {
+            toast(
+                "Stockage sécurisé indisponible : les modifications de profils ne seront pas " +
+                    "conservées après la fermeture de l'application.",
+            )
+        }
+    }
+
     /** Ferme la session en cours et revient au choix du profil. */
     fun switchProfile() {
+        resumeJob?.cancel()
         store.activeProfileId = null
         accountJob?.cancel()
         client = null
@@ -346,6 +361,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun activate(profile: Profile, account: AccountInfo?) {
         accountJob?.cancel()
+        resumeJob?.cancel()
         activeProfile = profile
         store.activeProfileId = profile.id
         this.account = account
@@ -651,6 +667,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ) {
         val c = client ?: return
         val owner = activeProfile?.id ?: return
+        playEpisodesFor(c, owner, context, seriesId, seriesName, seriesImage, episodes, index, startPositionMs)
+    }
+
+    /** [c] et [owner] : client et profil explicitement liés (jamais ceux devenus actifs entre-temps). */
+    private fun playEpisodesFor(
+        c: XtreamClient,
+        owner: String,
+        context: Context,
+        seriesId: String?,
+        seriesName: String,
+        seriesImage: String?,
+        episodes: List<Episode>,
+        index: Int,
+        startPositionMs: Long,
+    ) {
         val items = episodes.map {
             val label = "S${it.season} E${it.number} · ${it.title}"
             PlayItem(
@@ -677,18 +708,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** true pendant le chargement de la saison d'un épisode à reprendre. */
     var resuming by mutableStateOf(false); private set
+    private var resumeJob: Job? = null
 
     /**
      * Reprend un film / épisode depuis « Continuer à regarder ». Pour un épisode, toute la
      * saison est rechargée afin d'enchaîner sur les épisodes suivants, comme depuis la fiche série.
      */
     fun resume(context: Context, progress: WatchProgress) {
+        // Client et profil capturés maintenant : la reprise reste celle de ce compte.
         val c = client ?: return
+        val owner = activeProfile?.id ?: return
         val seriesId = progress.seriesId
         if (progress.kind == "episode" && seriesId != null) {
             if (resuming) return
             resuming = true
-            viewModelScope.launch {
+            resumeJob = viewModelScope.launch {
                 val detail = try {
                     c.seriesInfo(seriesId)
                 } catch (e: CancellationException) {
@@ -698,24 +732,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } finally {
                     resuming = false
                 }
+                // Profil changé pendant le chargement : on abandonne la reprise.
+                if (activeProfile?.id != owner || client !== c) return@launch
                 val episodes = detail?.seasons?.get(progress.season ?: -1)
                 val index = episodes?.indexOfFirst { it.id == progress.contentId } ?: -1
                 if (detail != null && episodes != null && index >= 0) {
-                    playEpisodes(
-                        context, seriesId, progress.title, detail.cover ?: progress.image,
+                    playEpisodesFor(
+                        c, owner, context, seriesId, progress.title, detail.cover ?: progress.image,
                         episodes, index, progress.position,
                     )
                 } else {
-                    resumeSingle(c, context, progress)
+                    resumeSingle(c, owner, context, progress)
                 }
             }
             return
         }
-        resumeSingle(c, context, progress)
+        resumeSingle(c, owner, context, progress)
     }
 
-    private fun resumeSingle(c: XtreamClient, context: Context, progress: WatchProgress) {
-        val owner = activeProfile?.id ?: return
+    private fun resumeSingle(c: XtreamClient, owner: String, context: Context, progress: WatchProgress) {
         val url = if (progress.kind == "episode") c.episodeUrl(progress.contentId, progress.extension ?: "mp4")
         else c.vodUrl(progress.contentId, progress.extension)
         val item = PlayItem(
