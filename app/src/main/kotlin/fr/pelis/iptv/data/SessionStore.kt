@@ -18,11 +18,21 @@ class SessionStore(context: Context) {
     var profilesUnreadable = false
         private set
 
+    /** Profils en clair d'une ancienne version pas encore chiffrés (stockage sécurisé indisponible). */
+    var migrationNotSaved = false
+        private set
+
+    /** Profils mis de côté relus, mais pas encore réenregistrés : ils restent aussi en copie de secours. */
+    var recoveryNotSaved = false
+        private set
+
     /**
      * Profils, chiffrés avec [SecretBox] (les anciennes versions les stockaient en clair).
      * Déchiffrement et écriture : à appeler hors du thread principal.
      */
     fun profiles(): List<Profile> {
+        migrationNotSaved = false
+        recoveryNotSaved = false
         val raw = prefs.getString(KEY_PROFILES, null)
         var list = when {
             raw == null -> migrateLegacy()
@@ -37,7 +47,9 @@ class SessionStore(context: Context) {
         }
         // Données en clair d'une version précédente : on les chiffre tout de suite
         // (si le chiffrement échoue, elles restent telles quelles et on réessaiera au prochain lancement).
-        if (raw != null && list.isNotEmpty() && !SecretBox.isEncrypted(raw)) saveProfiles(list)
+        if (raw != null && list.isNotEmpty() && !SecretBox.isEncrypted(raw) && !saveProfiles(list)) {
+            migrationNotSaved = true
+        }
 
         // Profils mis de côté lors d'un échec précédent (Keystore momentanément indisponible…) :
         // on retente à chaque lancement et on les réintègre dès qu'ils redeviennent lisibles.
@@ -48,8 +60,12 @@ class SessionStore(context: Context) {
             list = list + recovered.filter { r -> list.none { it.id == r.id } }
             recoveredKeys += key
         }
-        if (recoveredKeys.isNotEmpty() && saveProfiles(list)) {
-            prefs.edit().apply { recoveredKeys.forEach(::remove) }.commit()
+        if (recoveredKeys.isNotEmpty()) {
+            if (saveProfiles(list)) {
+                prefs.edit().apply { recoveredKeys.forEach(::remove) }.commit()
+            } else {
+                recoveryNotSaved = true
+            }
         }
         profilesUnreadable = aside.size > recoveredKeys.size
         return list
@@ -105,7 +121,10 @@ class SessionStore(context: Context) {
         if (server == null || user == null || pass == null) return emptyList()
         val p = Profile(UUID.randomUUID().toString(), "Mon IPTV", server, user, pass)
         // Anciennes données effacées seulement si le profil a bien été enregistré chiffré.
-        if (!saveProfiles(listOf(p))) return listOf(p)
+        if (!saveProfiles(listOf(p))) {
+            migrationNotSaved = true
+            return listOf(p)
+        }
         val edit = prefs.edit()
         ContentType.entries.forEach { t ->
             prefs.getStringSet("fav_${t.name}", null)?.let { edit.putStringSet(favKey(p.id, t), it.toSet()) }

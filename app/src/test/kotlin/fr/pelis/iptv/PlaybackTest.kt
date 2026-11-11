@@ -48,6 +48,24 @@ class SensitiveInputTest {
     }
 
     @Test
+    fun incompleteInputWithSecretIsNotSavedAtAll() {
+        // Cas reproduit par l'audit 1.4.2 : espaces initiaux, hôte encore absent.
+        assertEquals("", XtreamClient.redactServerInput("  https://bob:s3cr3t@"))
+        assertEquals("", XtreamClient.redactServerInput("bob:s3cr3t@"))
+        assertEquals("get.php", XtreamClient.redactServerInput("get.php?username=bob&password=s3cr3t"))
+        for (typed in listOf("  https://bob:s3cr3t@", " http://bob:s3cr3t@hote", "	https://bob:s3cr3t@hote:8080/x?password=s3cr3t")) {
+            assertFalse(typed, XtreamClient.redactServerInput(typed).contains("s3cr3t"))
+        }
+    }
+
+    @Test
+    fun ordinaryInputIsKeptWhileTyping() {
+        assertEquals("exemple.com", XtreamClient.redactServerInput("exemple.com"))
+        assertEquals("http://exemple.com:8080", XtreamClient.redactServerInput("http://exemple.com:8080"))
+        assertEquals("exem", XtreamClient.redactServerInput("exem"))
+    }
+
+    @Test
     fun userInfoIsRemovedFromSavedInput() {
         assertEquals("https://exemple.com/iptv", XtreamClient.redactServerInput("https://bob:s3cr3t@exemple.com/iptv"))
         assertEquals("exemple.com:8080", XtreamClient.redactServerInput("bob:s3cr3t@exemple.com:8080"))

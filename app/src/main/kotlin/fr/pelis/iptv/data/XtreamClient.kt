@@ -284,14 +284,27 @@ class XtreamClient(val credentials: Credentials) {
 
         /** Retire d'une adresse les identifiants éventuels « utilisateur:motdepasse@ ». */
         fun stripUserInfo(input: String): String =
-            input.replace(Regex("^([a-zA-Z][a-zA-Z0-9+.-]*://)?[^/?#@]*@"), "$1")
+            input.trim().replace(Regex("^([a-zA-Z][a-zA-Z0-9+.-]*://)?[^/?#@]*@"), "$1")
 
         /**
          * Version de ce qui a été saisi dans le champ serveur qui peut être conservée dans
-         * l'état sauvegardé d'Android : sans paramètres (password=…) ni identifiants dans l'adresse.
+         * l'état sauvegardé d'Android. Approche conservatrice : l'adresse est reconstruite
+         * à partir de ses seuls éléments sûrs (schéma, hôte, port, chemin) ; une saisie
+         * qu'on ne sait pas analyser et qui pourrait contenir un secret n'est pas conservée.
          */
-        fun redactServerInput(input: String): String =
-            stripUserInfo(input).substringBefore('?').substringBefore('#')
+        fun redactServerInput(input: String): String {
+            val t = input.trim()
+            if (t.isEmpty()) return ""
+            val hasScheme = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://").containsMatchIn(t)
+            val url = (if (hasScheme) t else "http://$t").toHttpUrlOrNull()
+            if (url == null) {
+                // Lien incomplet (« https://bob:secret@ », « …?password=… ») : rien n'est gardé.
+                return if (t.any { it == '@' || it == '?' || it == '=' || it == '#' || it == '&' }) "" else t
+            }
+            val safe = url.newBuilder().username("").password("").query(null).fragment(null).build().toString()
+            val cleaned = if (url.encodedPath == "/" && !t.trimEnd().endsWith("/")) safe.trimEnd('/') else safe
+            return if (hasScheme) cleaned else cleaned.removePrefix("http://")
+        }
 
         /**
          * Extrait serveur / identifiants d'un lien M3U du type get.php?username=..&password=..

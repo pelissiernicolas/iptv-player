@@ -111,12 +111,32 @@ class PlayerActivity : FragmentActivity() {
     private var playWhenReadyWanted = true
 
     /**
-     * Activité recréée par Android (processus arrêté en arrière-plan…) : si un Chromecast lit
-     * déjà ce contenu, on rejoint sa lecture au lieu de recharger la file sur la TV.
+     * true quand l'utilisateur vient de demander ce contenu (lancement, nouvelle chaîne) :
+     * il remplace alors ce que lit le Chromecast. false quand Android recrée le lecteur :
+     * on se rattache d'abord à ce que lit la TV.
      */
-    private var restoring = false
-    private var pendingCastJoin = false
+    private var newContentRequested = true
+
+    /** Lien entre le Chromecast et notre liste de lecture. */
+    private enum class CastLink {
+        /** Pas de Cast. */
+        NONE,
+        /** État de la TV pas encore connu : aucune décision, aucune écriture. */
+        WAITING,
+        /** La TV lit un élément de notre liste ([castOffset] connu). */
+        ATTACHED,
+        /** La TV lit autre chose : on n'y touche pas et rien n'est enregistré. */
+        FOREIGN,
+    }
+    private var castLink = CastLink.NONE
     private val castJoinTimeout = Runnable { finishCastJoin(timedOut = true) }
+    private var foreignDialog: android.app.AlertDialog? = null
+
+    /**
+     * true si la lecture en cours correspond bien à notre liste : sinon, ni progression,
+     * ni historique, ni commande de zapping (elle viserait un autre contenu).
+     */
+    private val castLinked get() = !casting || castLink == CastLink.ATTACHED
 
     /** Pour la touche « chaîne précédente ». */
     private var currentIndex = -1
@@ -150,7 +170,7 @@ class PlayerActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        restoring = savedInstanceState != null
+        newContentRequested = savedInstanceState == null
         Library.init(this)
         tvMode = SessionStore(this).deviceMode == DEVICE_TV
         if (PlaylistHolder.current == null && savedInstanceState != null) {
@@ -319,7 +339,7 @@ class PlayerActivity : FragmentActivity() {
         saveProgress()
         if (!loadPlaylist()) return
         // Nouvelle demande de lecture : elle remplace ce que lit le Chromecast.
-        restoring = false
+        newContentRequested = true
         cancelCastJoin()
         val p = player
         if (casting) {
@@ -373,63 +393,118 @@ class PlayerActivity : FragmentActivity() {
         if (items.isEmpty() || !::playerView.isInitialized) return
         if (casting) {
             if (playerView.player == null) {
-                if (restoring) startCastJoin() else loadOnCast(resumeIndex, resumePosition)
+                if (newContentRequested) loadOnCast(resumeIndex, resumePosition) else startCastJoin()
+            } else if (castLink == CastLink.FOREIGN && foreignDialog == null) {
+                askReplaceForeign()
             }
         } else if (player == null) {
             initializePlayer()
         }
-        restoring = false
+        newContentRequested = false
     }
 
     // ---------- Reconnexion à une lecture Cast en cours ----------
 
     /**
-     * Rejoint la file du Chromecast si elle correspond à notre liste. L'état de la TV peut
-     * arriver quelques instants après la création du CastPlayer : on l'attend au plus
-     * [CAST_JOIN_TIMEOUT_MS] avant de décider.
+     * Se rattache à la session Cast sans rien envoyer à la TV tant que son état n'est pas
+     * connu. Utilisé à la recréation du lecteur ET à chaque session Cast disponible (choix
+     * d'un appareil, reprise automatique après une coupure réseau…) :
+     * - la TV lit un élément de notre liste -> on rejoint sa lecture (position de la TV) ;
+     * - la TV ne lit rien -> on y envoie notre contenu, à notre position, lecture ou pause ;
+     * - la TV lit autre chose -> on n'y touche pas et on demande à l'utilisateur.
+     * L'état de la TV peut arriver après coup : attente de [CAST_JOIN_TIMEOUT_MS] au plus.
      */
     private fun startCastJoin() {
         val c = castPlayer ?: return
+        castLink = CastLink.WAITING
+        lastCastIndex = resumeIndex
+        lastCastPosition = resumePosition
         playerView.player = c
         castBanner.visibility = View.VISIBLE
-        updateCastBanner(resumeIndex)
-        if (tryJoinCastQueue()) return
-        pendingCastJoin = true
+        castBanner.text = "Connexion au Chromecast…"
+        castBanner.setBackgroundColor(Color.TRANSPARENT)
         handler.removeCallbacks(castJoinTimeout)
-        handler.postDelayed(castJoinTimeout, CAST_JOIN_TIMEOUT_MS)
+        if (!decideCastLink(timedOut = false)) handler.postDelayed(castJoinTimeout, CAST_JOIN_TIMEOUT_MS)
     }
 
-    private fun tryJoinCastQueue(): Boolean {
-        val c = castPlayer ?: return false
-        if (c.mediaItemCount == 0) return false
-        val remote = (0 until c.mediaItemCount).map { c.getMediaItemAt(it).localConfiguration?.uri?.toString() }
-        val offset = castQueueOffset(remote, items.map(::castMediaItemUrl)) ?: return false
-        castOffset = offset
-        pendingCastJoin = false
+    /** true si une décision a été prise (rattachée, contenu envoyé ou TV occupée). */
+    private fun decideCastLink(timedOut: Boolean): Boolean {
+        val c = castPlayer ?: return true
+        if (castLink != CastLink.WAITING || !casting) return true
+        if (c.mediaItemCount > 0) {
+            val remote = (0 until c.mediaItemCount).map { c.getMediaItemAt(it).localConfiguration?.uri?.toString() }
+            val offset = castQueueOffset(remote, items.map(::castMediaItemUrl))
+            if (offset != null) {
+                attachToCastQueue(offset)
+            } else {
+                enterForeign()
+            }
+            return true
+        }
+        // File vide : on attend que l'état de la TV soit connu (ou le délai écoulé).
+        if (timedOut || remoteKnownIdle()) {
+            loadOnCast(resumeIndex, resumePosition)
+            return true
+        }
+        return false
+    }
+
+    /** true si le récepteur a déjà donné son état et qu'il ne lit rien. */
+    private fun remoteKnownIdle(): Boolean {
+        val status = CastSupport.context(this)?.sessionManager?.currentCastSession?.remoteMediaClient?.mediaStatus
+            ?: return false
+        return status.queueItemCount == 0
+    }
+
+    private fun attachToCastQueue(offset: Int) {
         handler.removeCallbacks(castJoinTimeout)
+        castOffset = offset
+        castLink = CastLink.ATTACHED
+        dismissForeignDialog()
         rememberCastState()
         onItemChanged()
         handler.removeCallbacks(progressSaver)
         handler.postDelayed(progressSaver, 5_000)
-        return true
     }
 
-    /** Délai écoulé : TV inactive -> on y relance notre contenu ; autre contenu -> on n'y touche pas. */
+    private fun enterForeign() {
+        handler.removeCallbacks(castJoinTimeout)
+        castLink = CastLink.FOREIGN
+        handler.removeCallbacks(progressSaver)
+        castBanner.text = "Le Chromecast lit un autre contenu.\nIl n'a pas été remplacé."
+        castBanner.setBackgroundColor(0xCC333333.toInt())
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) askReplaceForeign()
+    }
+
+    /** La TV lit autre chose : remplacer par notre contenu, ou la laisser telle quelle. */
+    private fun askReplaceForeign() {
+        if (castLink != CastLink.FOREIGN) return
+        dismissForeignDialog()
+        val title = items.getOrNull(resumeIndex)?.title.orEmpty()
+        foreignDialog = android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Le Chromecast lit autre chose")
+            .setMessage("Remplacer ce qu'il lit par « $title » ?")
+            .setPositiveButton("Remplacer") { _, _ -> if (castLink == CastLink.FOREIGN) loadOnCast(resumeIndex, resumePosition) }
+            .setNegativeButton("Laisser la TV", null)
+            .create()
+            .apply {
+                setOnDismissListener { foreignDialog = null; hideSystemUi() }
+                show()
+            }
+    }
+
+    private fun dismissForeignDialog() {
+        foreignDialog?.let { runCatching { it.dismiss() } }
+        foreignDialog = null
+    }
+
     private fun finishCastJoin(timedOut: Boolean) {
-        if (!pendingCastJoin || !casting) return
-        if (tryJoinCastQueue() || !timedOut) return
-        pendingCastJoin = false
-        val c = castPlayer ?: return
-        if (c.mediaItemCount == 0) {
-            loadOnCast(resumeIndex, resumePosition)
-        } else {
-            castBanner.text = "Le Chromecast lit un autre contenu : il n'a pas été remplacé."
-        }
+        decideCastLink(timedOut)
     }
 
     private fun cancelCastJoin() {
-        pendingCastJoin = false
         handler.removeCallbacks(castJoinTimeout)
+        if (castLink == CastLink.WAITING) castLink = if (casting) CastLink.ATTACHED else CastLink.NONE
     }
 
     override fun onStop() {
@@ -442,6 +517,7 @@ class PlayerActivity : FragmentActivity() {
         super.onDestroy()
         handler.removeCallbacks(progressSaver)
         handler.removeCallbacks(castJoinTimeout)
+        dismissForeignDialog()
         runCatching { unregisterReceiver(pipReceiver) }
         castPlayer?.let {
             it.setSessionAvailabilityListener(null)
@@ -516,23 +592,31 @@ class PlayerActivity : FragmentActivity() {
             // Le lecteur local connaît le format du son : on le note avant de le libérer.
             local?.let { rememberAudioFormat(index, it) }
             releasePlayer()
+            resumeIndex = index
+            resumePosition = position
             casting = true
-            cancelCastJoin()
-            loadOnCast(index, position)
+            // Nouvelle session ou reprise automatique (coupure réseau…) : on regarde d'abord
+            // ce que lit la TV avant d'y envoyer quoi que ce soit.
+            startCastJoin()
         }
 
         override fun onCastSessionUnavailable() {
             if (!casting) return
-            cancelCastJoin()
+            handler.removeCallbacks(castJoinTimeout)
+            dismissForeignDialog()
+            val wasAttached = castLink == CastLink.ATTACHED
             rememberCastState()
             saveProgress()
             handler.removeCallbacks(progressSaver)
+            val remotePlaying = castPlayer?.playWhenReady ?: true
             casting = false
+            castLink = CastLink.NONE
             castBanner.visibility = View.GONE
             playerView.player = null
             resumeIndex = lastCastIndex.coerceIn(0, items.lastIndex)
             resumePosition = if (items[resumeIndex].isLive) C.TIME_UNSET else lastCastPosition
-            playWhenReadyWanted = true
+            // Retour sur le téléphone : même état lecture/pause que sur la TV (si c'était notre contenu).
+            if (wasAttached) playWhenReadyWanted = remotePlaying
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) initializePlayer()
         }
     }
@@ -544,8 +628,11 @@ class PlayerActivity : FragmentActivity() {
         val end = minOf(items.size, start + CAST_WINDOW)
         castOffset = start
         val startPosition = if (position == C.TIME_UNSET || items[index].isLive) 0L else position
+        handler.removeCallbacks(castJoinTimeout)
+        dismissForeignDialog()
+        castLink = CastLink.ATTACHED
         c.setMediaItems((start until end).map { castMediaItem(it) }, index - start, startPosition)
-        c.playWhenReady = true
+        c.playWhenReady = playWhenReadyWanted
         c.prepare()
         playerView.player = c
         playerView.showController()
@@ -560,7 +647,7 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private fun rememberCastState() {
-        if (pendingCastJoin) return
+        if (!castLinked) return
         val c = castPlayer ?: return
         if (c.mediaItemCount == 0) return
         lastCastIndex = c.currentMediaItemIndex + castOffset
@@ -632,6 +719,7 @@ class PlayerActivity : FragmentActivity() {
 
     /** Va à l'élément [real] de la liste (recharge la file Cast si besoin). */
     private fun seekToItem(real: Int) {
+        if (!castLinked) return askReplaceForeign()
         val p = active ?: return
         if (real !in items.indices) return
         val local = if (casting) real - castOffset else real
@@ -652,12 +740,12 @@ class PlayerActivity : FragmentActivity() {
     private val listener = object : Player.Listener {
         override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
             // État du Chromecast reçu : on peut décider de rejoindre sa lecture.
-            if (pendingCastJoin && casting) finishCastJoin(timedOut = false)
+            if (castLink == CastLink.WAITING && casting) finishCastJoin(timedOut = false)
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             // Épisode terminé et enchaîné automatiquement : il sort de « Continuer à regarder ».
-            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && !pendingCastJoin) markFinished(currentIndex)
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && castLinked) markFinished(currentIndex)
             onItemChanged()
         }
 
@@ -747,8 +835,8 @@ class PlayerActivity : FragmentActivity() {
 
     /** Appelé à chaque changement de chaîne / vidéo. */
     private fun onItemChanged() {
-        // File du Chromecast pas encore rapprochée de notre liste : index inconnu.
-        if (pendingCastJoin) return
+        // File du Chromecast pas (encore) rapprochée de notre liste : index sans rapport avec elle.
+        if (!castLinked) return
         val index = activeIndex() ?: return
         if (index != currentIndex) {
             if (currentIndex >= 0) previousIndex = currentIndex
@@ -788,6 +876,7 @@ class PlayerActivity : FragmentActivity() {
      * aussi bien sur le téléphone que sur le Chromecast.
      */
     private fun showChannelPicker() {
+        if (!castLinked) return askReplaceForeign()
         if (items.firstOrNull()?.isLive != true || items.size < 2) return
         val current = currentIndex.coerceIn(0, items.lastIndex)
         val names = items.mapIndexed { i, item -> "${i + 1}.  ${item.title}" }.toTypedArray()
@@ -817,7 +906,7 @@ class PlayerActivity : FragmentActivity() {
 
     /** Mémorise la position du film / épisode en cours pour « Continuer à regarder ». */
     private fun saveProgress() {
-        if (pendingCastJoin) return
+        if (!castLinked) return
         val p = active ?: return
         if (p.mediaItemCount == 0) return
         val item = items.getOrNull(activeIndex() ?: return) ?: return

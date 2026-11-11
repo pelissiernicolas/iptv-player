@@ -148,6 +148,8 @@ fun GuideScreen(vm: MainViewModel) {
                             val programs = vm.epg[channel.id]
                             when {
                                 programs == null -> GuideHint("Chargement…")
+                                programs.isEmpty() && vm.epgFailed[channel.id] == true ->
+                                    GuideHint("Guide momentanément indisponible (nouvel essai automatique)")
                                 programs.isEmpty() -> GuideHint("Programmes non fournis par le serveur")
                                 programs.none { it.end > windowStart && it.start < windowEnd } ->
                                     GuideHint("Pas de programme sur cette période")

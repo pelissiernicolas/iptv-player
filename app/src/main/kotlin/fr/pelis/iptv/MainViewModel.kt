@@ -112,6 +112,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var guideTitle by mutableStateOf(""); private set
     /** Programmes par identifiant de chaîne (chargés à la demande). */
     val epg = mutableStateMapOf<String, List<EpgProgram>>()
+    /** Chaînes dont le dernier chargement du guide a échoué (réseau…) : nouvel essai automatique. */
+    val epgFailed = mutableStateMapOf<String, Boolean>()
     private val epgFetchedAt = HashMap<String, Long>()
     private val epgSemaphore = Semaphore(4)
 
@@ -136,14 +138,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         Library.init(app)
         viewModelScope.launch {
             profiles = withContext(storeDispatcher) { store.profiles() }
-            if (store.profilesUnreadable) {
-                Toast.makeText(
-                    app,
-                    "Des profils enregistrés n'ont pas pu être relus sur cet appareil. Ils sont conservés et " +
-                        "seront récupérés automatiquement s'ils redeviennent lisibles ; sinon, ajoutez à nouveau votre compte.",
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
+            storageMessage()?.let { Toast.makeText(app, it, Toast.LENGTH_LONG).show() }
             if (store.deviceMode == null) {
                 // Premier démarrage : on demande d'abord le type d'appareil.
                 screen = Screen.DeviceSetup(firstLaunch = true)
@@ -336,10 +331,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteProfile(profile: Profile) {
         profiles = profiles.filterNot { it.id == profile.id }
-        persistProfiles()
-        store.deleteProfileData(profile.id)
-        Library.deleteProfileData(profile.id)
         if (store.activeProfileId == profile.id) store.activeProfileId = null
+        // Favoris, progression et historique effacés seulement une fois la liste bien enregistrée :
+        // sinon le profil réapparaîtrait au prochain lancement sans ses données.
+        persistProfiles {
+            store.deleteProfileData(profile.id)
+            Library.deleteProfileData(profile.id)
+        }
         if (profiles.isEmpty()) screen = Screen.EditProfile(null)
     }
 
@@ -348,17 +346,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * écrit (jamais d'identifiants en clair) : les profils restent utilisables jusqu'à la
      * fermeture de l'application, et l'utilisateur est prévenu.
      */
-    private fun persistProfiles() {
+    private fun persistProfiles(onSaved: () -> Unit = {}) {
         val snapshot = profiles
         viewModelScope.launch {
             val saved = withContext(storeDispatcher) { store.saveProfiles(snapshot) }
-            if (!saved) {
+            if (saved) {
+                onSaved()
+            } else {
                 toast(
                     "Stockage sécurisé indisponible : les modifications de profils ne seront pas " +
                         "conservées après la fermeture de l'application.",
                 )
             }
         }
+    }
+
+    /** Problème rencontré à la lecture des profils au démarrage (null si tout va bien). */
+    private fun storageMessage(): String? = when {
+        store.profilesUnreadable ->
+            "Des profils enregistrés n'ont pas pu être relus sur cet appareil. Ils sont conservés et " +
+                "seront récupérés automatiquement s'ils redeviennent lisibles ; sinon, ajoutez à nouveau votre compte."
+        store.migrationNotSaved ->
+            "Vos profils n'ont pas pu être chiffrés (stockage sécurisé indisponible). Ils restent dans l'ancien " +
+                "format ; nouvel essai au prochain démarrage."
+        store.recoveryNotSaved ->
+            "Des profils ont été récupérés mais pas encore réenregistrés (stockage sécurisé indisponible) : " +
+                "nouvel essai au prochain démarrage."
+        else -> null
     }
 
     /** Ferme la session en cours et revient au choix du profil. */
@@ -398,6 +412,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         allCache.clear()
         tabStates.clear()
         epg.clear()
+        epgFailed.clear()
         epgFetchedAt.clear()
         query = ""
         searchResults = null
@@ -627,6 +642,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val next = try {
                 val programs = epgSemaphore.withPermit { c.shortEpg(entry.id) }
                 epg[entry.id] = programs
+                epgFailed.remove(entry.id)
                 // Prochain rafraîchissement : fin du programme en cours (au plus tard dans 20 min).
                 val now = System.currentTimeMillis()
                 val end = programs.firstOrNull { it.end > now }?.end ?: (now + EPG_TTL_MS)
@@ -636,6 +652,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } catch (_: Exception) {
                 // Erreur : on garde l'éventuel guide déjà affiché et on retente plus tôt.
                 if (epg[entry.id] == null) epg[entry.id] = emptyList()
+                epgFailed[entry.id] = true
                 System.currentTimeMillis() + EPG_RETRY_MS
             }
             epgFetchedAt[entry.id] = next
