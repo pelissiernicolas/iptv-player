@@ -51,6 +51,7 @@ private fun App(vm: MainViewModel) {
                 CircularProgressIndicator()
             }
             is Screen.DeviceSetup -> DeviceSetupScreen(vm, s.firstLaunch)
+            is Screen.PhoneLink -> fr.pelis.iptv.ui.PhoneLinkScreen(vm, s.mode)
             Screen.Profiles -> ProfilesScreen(vm)
             is Screen.EditProfile -> ProfileEditScreen(vm, s.profile)
             Screen.Home -> stateHolder.SaveableStateProvider("home:${vm.activeProfile?.id}") {

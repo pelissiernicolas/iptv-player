@@ -3,6 +3,7 @@ package fr.pelis.iptv.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +22,10 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.foundation.shape.CircleShape
+import fr.pelis.iptv.transfer.PhoneLinkServer
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,6 +34,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.Saver
@@ -71,19 +79,11 @@ fun ProfileEditScreen(vm: MainViewModel, editing: Profile?) {
     val submit = { vm.saveProfile(editing, name, server, user, pass) }
     val fieldMod = Modifier.widthIn(max = 480.dp).fillMaxWidth()
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .systemBarsPadding()
-            .imePadding()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
-    ) {
+    val tv = LocalTvMode.current
+    val header: @Composable () -> Unit = {
         Icon(
             Icons.Filled.LiveTv, contentDescription = null,
-            Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary,
+            Modifier.size(if (tv) 48.dp else 64.dp), tint = MaterialTheme.colorScheme.primary,
         )
         Text(
             when {
@@ -91,15 +91,25 @@ fun ProfileEditScreen(vm: MainViewModel, editing: Profile?) {
                 vm.profiles.isEmpty() -> "IPTV Player"
                 else -> "Nouveau profil"
             },
-            style = MaterialTheme.typography.headlineMedium,
+            style = if (tv) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.headlineMedium,
         )
         Text(
             "Identifiants Xtream Codes",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         )
-        Spacer(Modifier.height(8.dp))
-
+    }
+    val tip: @Composable () -> Unit = {
+        Text(
+            "Astuce : collez votre lien M3U complet (…/get.php?username=…&password=…) " +
+                "dans le champ serveur pour tout remplir automatiquement.",
+            style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.widthIn(max = 480.dp),
+        )
+    }
+    val form: @Composable () -> Unit = {
         OutlinedTextField(
             value = name,
             onValueChange = { name = it },
@@ -162,7 +172,7 @@ fun ProfileEditScreen(vm: MainViewModel, editing: Profile?) {
         )
 
         vm.loginError?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center, modifier = fieldMod)
         }
 
         Button(onClick = submit, enabled = !vm.loginBusy, modifier = fieldMod.height(52.dp)) {
@@ -175,14 +185,70 @@ fun ProfileEditScreen(vm: MainViewModel, editing: Profile?) {
         if (canCancel) {
             TextButton(onClick = vm::cancelEdit) { Text("Annuler") }
         }
+    }
 
-        Text(
-            "Astuce : collez votre lien M3U complet (…/get.php?username=…&password=…) " +
-                "dans le champ serveur pour tout remplir automatiquement.",
-            style = MaterialTheme.typography.bodySmall,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            modifier = Modifier.widthIn(max = 480.dp),
-        )
+    if (tv) {
+        // Focus initial sur « Saisir depuis un téléphone » : un simple OK suffit.
+        val phoneFocus = remember { FocusRequester() }
+        if (editing == null) LaunchedEffect(Unit) { runCatching { phoneFocus.requestFocus() } }
+        // Téléviseur : deux colonnes, tout est visible d'un coup sans faire défiler.
+        Row(
+            Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .padding(horizontal = 48.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(56.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                Modifier.weight(1f, fill = false).widthIn(max = 400.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                header()
+                if (editing == null) {
+                    // Saisie au clavier de la télécommande fastidieuse : le téléphone s'en charge.
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { vm.openPhoneLink(PhoneLinkServer.Mode.LOGIN) },
+                        modifier = Modifier.fillMaxWidth().height(52.dp).focusRequester(phoneFocus).tvItem(CircleShape),
+                    ) {
+                        Icon(Icons.Filled.QrCode2, contentDescription = null)
+                        Text("  Saisir depuis un téléphone")
+                    }
+                    Text(
+                        "Le plus simple : scannez un QR code et saisissez vos identifiants sur le téléphone.",
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                tip()
+            }
+            Column(
+                Modifier.weight(1f, fill = false).widthIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                form()
+            }
+        }
+    } else {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+        ) {
+            header()
+            Spacer(Modifier.height(8.dp))
+            form()
+            tip()
+        }
     }
 }

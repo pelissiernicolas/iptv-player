@@ -15,6 +15,7 @@ serializationJson = "1.8.1"
 media3 = "1.6.1"
 okhttp = "4.12.0"
 coil = "2.7.0"
+zxing = "3.5.3"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
@@ -40,6 +41,7 @@ androidx-media3-common = { module = "androidx.media3:media3-common", version.ref
 androidx-media3-cast = { module = "androidx.media3:media3-cast", version.ref = "media3" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTest" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExt" }
 androidx-test-espresso-core = { module = "androidx.test.espresso:espresso-core", version.ref = "androidxTestEspresso" }

@@ -15,6 +15,7 @@ import fr.pelis.iptv.data.Profile
 import fr.pelis.iptv.data.Episode
 import fr.pelis.iptv.data.EpgProgram
 import fr.pelis.iptv.data.Backup
+import fr.pelis.iptv.transfer.PhoneLinkServer
 import fr.pelis.iptv.data.Library
 import fr.pelis.iptv.data.MovieDetail
 import fr.pelis.iptv.data.WatchProgress
@@ -50,6 +51,8 @@ sealed interface Screen {
     data object Guide : Screen
     /** Choix Téléviseur / Smartphone-tablette ([firstLaunch] = premier démarrage). */
     data class DeviceSetup(val firstLaunch: Boolean) : Screen
+    /** QR code : configuration depuis un téléphone (compte ou sauvegarde). */
+    data class PhoneLink(val mode: PhoneLinkServer.Mode) : Screen
 }
 
 const val DEVICE_TV = "tv"
@@ -245,10 +248,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Écrit favoris, progression et chaînes récentes du profil actif dans [uri] (choisi par l'utilisateur). */
-    fun exportBackup(uri: android.net.Uri) {
-        val owner = activeProfile?.id ?: return
+    private fun currentBackup(owner: String): Backup {
         val (progressList, recent) = Library.snapshot(owner)
-        val backup = Backup(
+        return Backup(
             exportedAt = System.currentTimeMillis(),
             favorites = Backup.Favorites(
                 live = favorites[ContentType.LIVE].orEmpty().sorted(),
@@ -258,6 +260,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             progress = progressList,
             recentChannels = recent,
         )
+    }
+
+    fun exportBackup(uri: android.net.Uri) {
+        val owner = activeProfile?.id ?: return
+        val backup = currentBackup(owner)
         val resolver = getApplication<Application>().contentResolver
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -297,26 +304,99 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             // Le profil a pu changer pendant la lecture du fichier : on n'importe que dans celui choisi.
             if (activeProfile?.id != owner) return@launch
-            var addedFavorites = 0
-            ContentType.entries.forEach { type ->
-                val current = favorites[type].orEmpty()
-                val merged = current + backup.favorites[type]
-                addedFavorites += merged.size - current.size
-                if (merged.size != current.size) {
-                    favorites[type] = merged
-                    store.setFavorites(owner, type, merged)
-                }
-            }
-            Library.importData(owner, backup.progress, backup.recentChannels)
-            // Les listes affichées sont recalculées (catégorie Favoris) ; le catalogue en cache reste.
-            loadJobs.values.forEach { it.cancel() }
-            loadJobs.clear()
-            tabStates.clear()
-            if (!homeSelected) selectTab(currentTab)
-            toast(
-                "Sauvegarde importée (${backupSummary(addedFavorites, backup)})",
-            )
+            val addedFavorites = applyBackup(owner, backup)
+            toast("Sauvegarde importée (${backupSummary(addedFavorites, backup)})")
         }
+    }
+
+    /** Fusionne [backup] dans le profil [owner] ; renvoie le nombre de favoris ajoutés. */
+    private fun applyBackup(owner: String, backup: Backup): Int {
+        var addedFavorites = 0
+        ContentType.entries.forEach { type ->
+            val current = favorites[type].orEmpty()
+            val merged = current + backup.favorites[type]
+            addedFavorites += merged.size - current.size
+            if (merged.size != current.size) {
+                favorites[type] = merged
+                store.setFavorites(owner, type, merged)
+            }
+        }
+        Library.importData(owner, backup.progress, backup.recentChannels)
+        // Les listes affichées sont recalculées (catégorie Favoris) ; le catalogue en cache reste.
+        loadJobs.values.forEach { it.cancel() }
+        loadJobs.clear()
+        tabStates.clear()
+        if (!homeSelected) selectTab(currentTab)
+        return addedFavorites
+    }
+
+    // ---------- Configuration depuis un téléphone (QR code) ----------
+
+    private var screenBeforePhoneLink: Screen? = null
+
+    fun openPhoneLink(mode: PhoneLinkServer.Mode) {
+        if (screen !is Screen.PhoneLink) screenBeforePhoneLink = screen
+        screen = Screen.PhoneLink(mode)
+    }
+
+    fun closePhoneLink() {
+        if (screen is Screen.PhoneLink) screen = screenBeforePhoneLink ?: Screen.Profiles
+        screenBeforePhoneLink = null
+    }
+
+    /** Compte saisi sur le téléphone : vérifié, enregistré puis ouvert. Message pour le téléphone. */
+    suspend fun loginFromPhone(request: PhoneLinkServer.LoginRequest): String = withContext(Dispatchers.Main) {
+        val m3u = XtreamClient.parseM3uLink(request.server)
+        val server = m3u?.server ?: request.server.trim()
+        val username = (m3u?.username ?: request.username).trim()
+        val password = m3u?.password ?: request.password
+        if (server.isBlank() || username.isBlank() || password.isEmpty()) {
+            throw IllegalArgumentException("Remplissez le serveur, l'utilisateur et le mot de passe (ou collez le lien M3U complet).")
+        }
+        if (loginBusy) throw IllegalStateException("Une connexion est déjà en cours sur la TV.")
+        val url = XtreamClient.normalizeServer(server)
+        val profile = Profile(
+            id = UUID.randomUUID().toString(),
+            name = request.name.trim().take(40)
+                .ifBlank { url.substringAfter("://").substringBefore(':').substringBefore('/') },
+            server = url,
+            username = username,
+            password = password,
+        )
+        loginBusy = true
+        try {
+            val info = XtreamClient(profile.credentials()).login()
+            profiles = profiles + profile
+            persistProfiles()
+            screenBeforePhoneLink = null
+            activate(profile, info)
+            "Compte « ${profile.name} » ajouté : la TV l'ouvre."
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw IllegalStateException(e.message ?: "Serveur injoignable")
+        } finally {
+            loginBusy = false
+        }
+    }
+
+    /** Sauvegarde envoyée par le téléphone, fusionnée dans le profil ouvert. */
+    suspend fun importBackupFromPhone(text: String): String {
+        val backup = withContext(Dispatchers.Default) {
+            require(text.length <= Backup.MAX_BYTES) { "fichier trop volumineux" }
+            Backup.decode(text)
+        }
+        return withContext(Dispatchers.Main) {
+            val owner = activeProfile?.id ?: throw IllegalStateException("Aucun profil ouvert sur la TV.")
+            val added = applyBackup(owner, backup)
+            "Sauvegarde importée (${backupSummary(added, backup)})".also { toast(it) }
+        }
+    }
+
+    /** Sauvegarde du profil ouvert, téléchargée depuis le téléphone. */
+    suspend fun exportBackupForPhone(): Pair<String, String> = withContext(Dispatchers.Main) {
+        val owner = activeProfile?.id ?: throw IllegalStateException("Aucun profil ouvert sur la TV.")
+        backupFileName() to Backup.encode(currentBackup(owner))
     }
 
     private fun toast(message: String) {

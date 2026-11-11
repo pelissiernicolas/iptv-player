@@ -3,6 +3,7 @@ package fr.pelis.iptv.ui
 import android.content.ActivityNotFoundException
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import fr.pelis.iptv.transfer.PhoneLinkServer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -342,6 +343,7 @@ fun HomeScreen(vm: MainViewModel) {
             checkingUpdate = vm.checkingUpdate,
             onCheckUpdate = { showAccount = false; vm.checkForUpdate(manual = true) },
             onRefreshCatalog = { showAccount = false; vm.refreshCatalog() },
+            onPhoneBackup = { showAccount = false; vm.openPhoneLink(PhoneLinkServer.Mode.BACKUP) },
             onExport = { showAccount = false; launchPicker { exportLauncher.launch(vm.backupFileName()) } },
             onImport = {
                 showAccount = false
@@ -531,6 +533,7 @@ private fun AccountDialog(
     checkingUpdate: Boolean,
     onCheckUpdate: () -> Unit,
     onRefreshCatalog: () -> Unit,
+    onPhoneBackup: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
     onDismiss: () -> Unit,
@@ -556,11 +559,18 @@ private fun AccountDialog(
                 TextButton(onClick = onRefreshCatalog, contentPadding = PaddingValues(0.dp)) {
                     Text("Actualiser le catalogue (chaînes, films, séries)")
                 }
-                TextButton(onClick = onExport, contentPadding = PaddingValues(0.dp)) {
-                    Text("Exporter favoris et historique")
-                }
-                TextButton(onClick = onImport, contentPadding = PaddingValues(0.dp)) {
-                    Text("Importer une sauvegarde")
+                if (tvMode) {
+                    // Téléviseur : pas de gestionnaire de fichiers, l'échange passe par un téléphone.
+                    TextButton(onClick = onPhoneBackup, contentPadding = PaddingValues(0.dp)) {
+                        Text("Sauvegarde via un téléphone (QR code)")
+                    }
+                } else {
+                    TextButton(onClick = onExport, contentPadding = PaddingValues(0.dp)) {
+                        Text("Exporter favoris et historique")
+                    }
+                    TextButton(onClick = onImport, contentPadding = PaddingValues(0.dp)) {
+                        Text("Importer une sauvegarde")
+                    }
                 }
                 InfoRow("Appareil", if (tvMode) "Téléviseur" else "Smartphone / tablette")
                 TextButton(onClick = onChangeDevice, contentPadding = PaddingValues(0.dp)) {

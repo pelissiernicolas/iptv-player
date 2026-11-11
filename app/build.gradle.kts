@@ -13,9 +13,9 @@ android {
     applicationId = "fr.pelis.iptv"
     minSdk = 24
     targetSdk = 36
-    versionCode = 16
+    versionCode = 17
     // -PversionNameOverride=… : uniquement pour tester la mise à jour automatique.
-    versionName = (project.findProperty("versionNameOverride") as String?) ?: "1.4.8"
+    versionName = (project.findProperty("versionNameOverride") as String?) ?: "1.4.9"
   }
 
   // Clé de signature des releases : décrite dans keystore.properties (non versionné).
@@ -101,6 +101,7 @@ dependencies {
   // Networking & Image loading
   implementation(libs.okhttp)
   implementation(libs.coil.compose)
+  implementation(libs.zxing.core) // QR code (configuration depuis un téléphone)
 
   // Tests
   testImplementation(libs.junit)
