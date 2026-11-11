@@ -12,13 +12,18 @@ data class Profile(
     val password: String,
 ) {
     fun credentials() = Credentials(server, username, password)
+
+    /** Jamais d'identifiants dans un log ou un message d'erreur par accident. */
+    override fun toString() = "Profile(id=$id, name=$name, server=$server, username=***, password=***)"
 }
 
 data class Credentials(
     val server: String,
     val username: String,
     val password: String,
-)
+) {
+    override fun toString() = "Credentials(server=$server, username=***, password=***)"
+}
 
 data class AccountInfo(
     val username: String,
@@ -84,6 +89,9 @@ data class WatchProgress(
     val position: Long,
     val duration: Long,
     val updatedAt: Long,
+    /** Épisodes : série et saison, pour reprendre avec la suite de la saison. */
+    val seriesId: String? = null,
+    val season: Int? = null,
 )
 
 /** Chaîne regardée récemment. */

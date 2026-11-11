@@ -1,5 +1,6 @@
 package fr.pelis.iptv.player
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
@@ -19,6 +20,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
@@ -32,6 +34,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -94,6 +97,8 @@ class PlayerActivity : FragmentActivity() {
     private lateinit var titleView: TextView
 
     private var items: List<PlayItem> = emptyList()
+    /** Profil qui a lancé la lecture : progression et historique sont écrits dans celui-ci. */
+    private var profileId: String? = null
     private var activeUrls: MutableList<String> = mutableListOf()
     private val fallbackUsed = HashSet<Int>()
     private var resumeIndex = 0
@@ -123,13 +128,18 @@ class PlayerActivity : FragmentActivity() {
     /** Mode Téléviseur choisi au premier démarrage : pas de PiP ni de Cast, zapping haut/bas. */
     private var tvMode = false
     private lateinit var zapOverlay: TextView
+    private lateinit var errorPanel: LinearLayout
+    private lateinit var errorText: TextView
+
+    private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
     private val hideZapOverlay = Runnable { zapOverlay.visibility = View.GONE }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Library.init(this)
         tvMode = SessionStore(this).deviceMode == DEVICE_TV
-        if (!loadPlaylist()) {
+        // savedInstanceState != null : activité recréée (ex. après l'arrêt du processus en arrière-plan).
+        if (!loadPlaylist(savedInstanceState)) {
             finish()
             return
         }
@@ -147,7 +157,7 @@ class PlayerActivity : FragmentActivity() {
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(56, 28, 32, 28)
+            setPadding(20.dp, 10.dp, 12.dp, 10.dp)
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP,
             )
@@ -156,7 +166,7 @@ class PlayerActivity : FragmentActivity() {
                 setImageResource(R.drawable.ic_last_channel)
                 setBackgroundColor(Color.TRANSPARENT)
                 contentDescription = "Chaîne précédente"
-                setPadding(24, 24, 24, 24)
+                setPadding(8.dp, 8.dp, 8.dp, 8.dp)
                 visibility = View.GONE
                 setOnClickListener { goToPreviousChannel() }
             }
@@ -165,7 +175,7 @@ class PlayerActivity : FragmentActivity() {
                 setImageResource(R.drawable.ic_channel_list)
                 setBackgroundColor(Color.TRANSPARENT)
                 contentDescription = "Liste des chaînes"
-                setPadding(24, 24, 24, 24)
+                setPadding(8.dp, 8.dp, 8.dp, 8.dp)
                 visibility = if (items.firstOrNull()?.isLive == true && items.size > 1) View.VISIBLE else View.GONE
                 setOnClickListener { showChannelPicker() }
             }
@@ -176,7 +186,7 @@ class PlayerActivity : FragmentActivity() {
                     setImageResource(R.drawable.ic_pip)
                     setBackgroundColor(Color.TRANSPARENT)
                     contentDescription = "Picture-in-Picture"
-                    setPadding(24, 24, 24, 24)
+                    setPadding(8.dp, 8.dp, 8.dp, 8.dp)
                     setOnClickListener { enterPip() }
                 })
             }
@@ -197,7 +207,7 @@ class PlayerActivity : FragmentActivity() {
             setTextColor(Color.WHITE)
             textSize = 18f
             gravity = Gravity.CENTER
-            setPadding(48, 24, 48, 24)
+            setPadding(16.dp, 8.dp, 16.dp, 8.dp)
             maxWidth = (resources.displayMetrics.widthPixels * 0.8).toInt()
             visibility = View.GONE
             layoutParams = FrameLayout.LayoutParams(
@@ -208,12 +218,42 @@ class PlayerActivity : FragmentActivity() {
             setTextColor(Color.WHITE)
             textSize = 22f
             setBackgroundColor(0xB0000000.toInt())
-            setPadding(48, 24, 48, 24)
+            setPadding(16.dp, 8.dp, 16.dp, 8.dp)
             visibility = View.GONE
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM or Gravity.START,
-            ).apply { setMargins(64, 0, 0, 64) }
+            ).apply { setMargins(24.dp, 0, 0, 24.dp) }
+        }
+        errorText = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 18f
+            gravity = Gravity.CENTER
+        }
+        errorPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setBackgroundColor(0xE0202020.toInt())
+            setPadding(24.dp, 20.dp, 24.dp, 16.dp)
+            visibility = View.GONE
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER,
+            )
+            addView(errorText)
+            addView(LinearLayout(this@PlayerActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                setPadding(0, 12.dp, 0, 0)
+                val retry = Button(this@PlayerActivity).apply {
+                    text = "Réessayer"
+                    setOnClickListener { retryPlayback() }
+                }
+                addView(retry)
+                addView(Button(this@PlayerActivity).apply {
+                    text = "Retour"
+                    setOnClickListener { finish() }
+                })
+            })
         }
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
@@ -221,10 +261,12 @@ class PlayerActivity : FragmentActivity() {
             addView(castBanner)
             addView(zapOverlay)
             addView(topBar)
+            addView(errorPanel)
         })
         hideSystemUi()
 
-        CastSupport.context(this)?.let { ctx ->
+        // Mode Téléviseur : pas de Cast, inutile d'initialiser Google Cast.
+        if (!tvMode) CastSupport.context(this)?.let { ctx ->
             castPlayer = CastPlayer(ctx).apply {
                 addListener(listener)
                 setSessionAvailabilityListener(castSessionListener)
@@ -256,17 +298,31 @@ class PlayerActivity : FragmentActivity() {
         }
     }
 
-    private fun loadPlaylist(): Boolean {
-        items = PlaylistHolder.items
-        if (items.isEmpty()) return false
+    private fun loadPlaylist(saved: Bundle? = null): Boolean {
+        val session = (if (saved != null) PlaylistHolder.restore(this) else PlaylistHolder.current) ?: return false
+        if (session.items.isEmpty()) return false
+        items = session.items
+        profileId = session.profileId
         activeUrls = items.map { it.url }.toMutableList()
         fallbackUsed.clear()
-        resumeIndex = PlaylistHolder.startIndex
-        resumePosition = PlaylistHolder.startPositionMs.takeIf { it > 0 } ?: C.TIME_UNSET
+        resumeIndex = (saved?.getInt(STATE_INDEX, session.startIndex) ?: session.startIndex).coerceIn(0, items.lastIndex)
+        resumePosition = (saved?.getLong(STATE_POSITION, session.startPositionMs) ?: session.startPositionMs)
+            .takeIf { it > 0 } ?: C.TIME_UNSET
         currentIndex = -1
         previousIndex = -1
         if (::lastChannelButton.isInitialized) updateLastChannelButton()
         return true
+    }
+
+    /** Élément et position en cours, pour recréer le lecteur au même endroit. */
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (items.isEmpty()) return
+        val index = activeIndex() ?: resumeIndex
+        val p = active
+        val position = if (p != null && p.mediaItemCount > 0) p.currentPosition else resumePosition
+        outState.putInt(STATE_INDEX, index)
+        outState.putLong(STATE_POSITION, if (items.getOrNull(index)?.isLive == true) -1 else position)
     }
 
     override fun onStart() {
@@ -317,8 +373,15 @@ class PlayerActivity : FragmentActivity() {
             .setConstantBitrateSeekingEnabled(true)
         val renderers = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
 
+        val audio = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+            .build()
         val exo = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory, extractors))
+            // Pause pendant un appel / une autre appli audio, et quand le casque est débranché.
+            .setAudioAttributes(audio, true)
+            .setHandleAudioBecomingNoisy(true)
             .build()
         exo.addListener(listener)
         exo.setMediaItems(items.indices.map { mediaItem(it) }, resumeIndex, resumePosition)
@@ -409,16 +472,16 @@ class PlayerActivity : FragmentActivity() {
         val item = items.getOrNull(index) ?: return
         val audio = local.currentTracks.groups.firstOrNull { it.type == C.TRACK_TYPE_AUDIO } ?: return
         val mime = audio.getTrackFormat(0).sampleMimeType ?: return
-        audioFormats[item.url] = mime
+        audioFormats[formatKey(item)] = mime
     }
 
     /** Message d'avertissement si le son de l'élément [index] ne peut pas être lu par le Chromecast. */
     private fun castAudioWarning(index: Int): String? {
         val item = items.getOrNull(index) ?: return null
         if (castMediaItemUrl(item).endsWith(".m3u8", ignoreCase = true)) return null
-        val codec = CAST_UNSUPPORTED_AUDIO[audioFormats[item.url] ?: return null] ?: return null
-        return "Le son de cette vidéo est en $codec : le Chromecast ne peut pas le lire depuis ce fichier, " +
-            "l'image passera sans le son. Coupez le Cast pour continuer sur le téléphone."
+        val codec = CAST_UNSUPPORTED_AUDIO[audioFormats[formatKey(item)] ?: return null] ?: return null
+        return "Le son de cette vidéo est en $codec : la plupart des Chromecast ne le décodent pas dans ce " +
+            "type de fichier, l'image risque de passer sans le son. Coupez le Cast pour continuer sur le téléphone."
     }
 
     private fun updateCastBanner(index: Int) {
@@ -430,6 +493,9 @@ class PlayerActivity : FragmentActivity() {
         }
         castBanner.setBackgroundColor(if (warning != null) 0xCC5D1A1A.toInt() else Color.TRANSPARENT)
     }
+
+    /** Clé du cache des formats audio : identifiant du contenu, jamais l'URL (qui contient les identifiants). */
+    private fun formatKey(item: PlayItem) = "${item.kind ?: if (item.isLive) "live" else "vod"}:${item.contentId ?: item.title}"
 
     private fun castMediaItemUrl(item: PlayItem) = if (item.isLive) item.fallbackUrl ?: item.url else item.url
 
@@ -481,7 +547,11 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private val listener = object : Player.Listener {
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = onItemChanged()
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            // Épisode terminé et enchaîné automatiquement : il sort de « Continuer à regarder ».
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) markFinished(currentIndex)
+            onItemChanged()
+        }
 
         override fun onTracksChanged(tracks: Tracks) {
             val local = player ?: return
@@ -520,12 +590,46 @@ class PlayerActivity : FragmentActivity() {
                 p.play()
                 return
             }
-            Toast.makeText(
-                this@PlayerActivity,
-                "Lecture impossible (${error.errorCodeName})",
-                Toast.LENGTH_LONG,
-            ).show()
+            showError(error)
         }
+    }
+
+    /** Message d'erreur affiché tant que l'utilisateur n'a pas choisi « Réessayer » ou « Retour ». */
+    private fun showError(error: PlaybackException) {
+        val reason = when (error.errorCode) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Connexion au serveur impossible. Vérifiez votre réseau."
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Le serveur refuse ce flux (abonnement, nombre de connexions ou flux hors ligne)."
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "Ce contenu n'existe plus sur le serveur."
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "Le fichier envoyé par le serveur est vide ou illisible."
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "Ce format vidéo n'est pas pris en charge par l'appareil."
+            else -> "Lecture impossible."
+        }
+        errorText.text = "$reason\n(${error.errorCodeName})"
+        errorPanel.visibility = View.VISIBLE
+        errorPanel.getChildAt(1)?.let { (it as? ViewGroup)?.getChildAt(0)?.requestFocus() }
+    }
+
+    private fun hideError() {
+        if (::errorPanel.isInitialized) errorPanel.visibility = View.GONE
+    }
+
+    private fun retryPlayback() {
+        hideError()
+        val p = player ?: return initializePlayer()
+        val index = p.currentMediaItemIndex
+        if (items.getOrNull(index)?.isLive == true) p.seekToDefaultPosition(index)
+        p.prepare()
+        p.play()
+    }
+
+    /** Élément lu jusqu'au bout : retiré de « Continuer à regarder ». */
+    private fun markFinished(index: Int) {
+        val owner = profileId ?: return
+        val key = items.getOrNull(index)?.progressKey ?: return
+        Library.removeProgress(owner, key)
     }
 
     private fun updateTitle() {
@@ -540,13 +644,15 @@ class PlayerActivity : FragmentActivity() {
             if (currentIndex >= 0) previousIndex = currentIndex
             currentIndex = index
         }
+        hideError()
         updateTitle()
         updateLastChannelButton()
         if (casting) updateCastBanner(index)
         val item = items.getOrNull(index) ?: return
         if (tvMode && item.isLive && !playerView.isControllerFullyVisible) showZapOverlay(index)
-        if (item.isLive && item.contentId != null) {
-            Library.addRecentChannel(RecentChannel(item.contentId, item.title, item.image, item.epgId))
+        val owner = profileId
+        if (owner != null && item.isLive && item.contentId != null) {
+            Library.addRecentChannel(owner, RecentChannel(item.contentId, item.title, item.image, item.epgId))
         }
     }
 
@@ -605,9 +711,11 @@ class PlayerActivity : FragmentActivity() {
         if (p.mediaItemCount == 0) return
         val item = items.getOrNull(activeIndex() ?: return) ?: return
         val key = item.progressKey ?: return
+        val owner = profileId ?: return
         val duration = p.duration
         if (item.isLive || duration == C.TIME_UNSET || duration <= 0) return
         Library.saveProgress(
+            owner,
             WatchProgress(
                 key = key,
                 kind = item.kind ?: "vod",
@@ -619,6 +727,8 @@ class PlayerActivity : FragmentActivity() {
                 position = p.currentPosition,
                 duration = duration,
                 updatedAt = System.currentTimeMillis(),
+                seriesId = item.seriesId,
+                season = item.season,
             ),
         )
     }
@@ -708,6 +818,8 @@ class PlayerActivity : FragmentActivity() {
 
     // ---------- Télécommande / système ----------
 
+    // Faux positif de lint : dispatchKeyEvent est une méthode publique d'Activity.
+    @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val p = active
         if (p != null && event.action == KeyEvent.ACTION_DOWN) {
@@ -762,8 +874,12 @@ class PlayerActivity : FragmentActivity() {
         /** Taille maximale de la file d'attente envoyée au Chromecast. */
         const val CAST_WINDOW = 20
 
-        /** Format audio connu par URL (rempli pendant la lecture locale). */
-        val audioFormats = HashMap<String, String>()
+        /** Format audio connu par contenu (rempli pendant la lecture locale), 100 entrées au plus. */
+        val audioFormats = object : LinkedHashMap<String, String>() {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 100
+        }
+        const val STATE_INDEX = "player_index"
+        const val STATE_POSITION = "player_position"
 
         /** Formats audio que le récepteur Cast par défaut ne décode pas dans un fichier (MKV, MP4…). */
         val CAST_UNSUPPORTED_AUDIO = mapOf(

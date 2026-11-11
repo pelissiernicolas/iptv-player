@@ -8,15 +8,18 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * Données locales du profil actif : progression de lecture et chaînes récentes.
- * Partagé entre l'écran principal et le lecteur (même processus) ; l'UI Compose
- * se met à jour automatiquement car les listes sont observables.
+ * Données locales par profil : progression de lecture et chaînes récentes.
+ *
+ * Les listes observables ([progress], [recentChannels]) reflètent le profil affiché par
+ * l'écran principal. Les écritures, elles, indiquent toujours le profil concerné : un
+ * lecteur lancé depuis le profil A (PiP, Cast) n'écrit jamais dans le profil B même si
+ * l'utilisateur a changé de profil entre-temps.
  */
 object Library {
     private const val MAX_PROGRESS = 60
     private const val MAX_RECENT = 30
-    private const val MIN_POSITION_MS = 15_000L
-    private const val FINISHED_RATIO = 0.95
+    const val MIN_POSITION_MS = 15_000L
+    const val FINISHED_RATIO = 0.95
 
     private var prefs: SharedPreferences? = null
     private val json = Json { ignoreUnknownKeys = true }
@@ -32,53 +35,58 @@ object Library {
         }
     }
 
+    /** Profil affiché par l'écran principal. */
     fun setProfile(id: String?) {
         profileId = id
         progress.clear()
         recentChannels.clear()
-        val p = prefs ?: return
         if (id == null) return
-        p.getString(progressKey(id), null)?.let { raw ->
-            runCatching { json.decodeFromString<List<WatchProgress>>(raw) }.getOrNull()?.let(progress::addAll)
-        }
-        p.getString(recentKey(id), null)?.let { raw ->
-            runCatching { json.decodeFromString<List<RecentChannel>>(raw) }.getOrNull()?.let(recentChannels::addAll)
-        }
+        progress.addAll(readProgress(id))
+        recentChannels.addAll(readRecent(id))
     }
 
     fun progressFor(key: String): WatchProgress? = progress.firstOrNull { it.key == key }
 
-    /** Enregistre la position ; supprime l'entrée si la vidéo est quasiment terminée. */
-    fun saveProgress(entry: WatchProgress) {
-        val id = profileId ?: return
-        if (entry.duration <= 0) return
-        val index = progress.indexOfFirst { it.key == entry.key }
-        val finished = entry.position >= entry.duration * FINISHED_RATIO
-        if (finished || entry.position < MIN_POSITION_MS) {
-            if (finished && index >= 0) {
-                progress.removeAt(index)
-                persistProgress(id)
+    /** Ce qu'il faut faire d'une position de lecture. */
+    enum class ProgressAction { SAVE, REMOVE, IGNORE }
+
+    /** Vidéo quasiment terminée -> retirée ; moins de 15 s regardées -> ignorée. */
+    fun progressAction(position: Long, duration: Long): ProgressAction = when {
+        duration <= 0 -> ProgressAction.IGNORE
+        position >= duration * FINISHED_RATIO -> ProgressAction.REMOVE
+        position < MIN_POSITION_MS -> ProgressAction.IGNORE
+        else -> ProgressAction.SAVE
+    }
+
+    /** Enregistre la position dans le profil [owner] ; supprime l'entrée si la vidéo est quasiment terminée. */
+    fun saveProgress(owner: String, entry: WatchProgress) {
+        when (progressAction(entry.position, entry.duration)) {
+            ProgressAction.IGNORE -> Unit
+            ProgressAction.REMOVE -> removeProgress(owner, entry.key)
+            ProgressAction.SAVE -> editProgress(owner) { list ->
+                list.removeAll { it.key == entry.key }
+                list.add(0, entry)
+                while (list.size > MAX_PROGRESS) list.removeAt(list.lastIndex)
             }
-            return
         }
-        if (index >= 0) progress.removeAt(index)
-        progress.add(0, entry)
-        while (progress.size > MAX_PROGRESS) progress.removeAt(progress.lastIndex)
-        persistProgress(id)
     }
 
-    fun removeProgress(key: String) {
-        val id = profileId ?: return
-        if (progress.removeAll { it.key == key }) persistProgress(id)
+    fun removeProgress(owner: String, key: String) {
+        editProgress(owner) { list -> list.removeAll { it.key == key } }
     }
 
-    fun addRecentChannel(channel: RecentChannel) {
-        val id = profileId ?: return
-        if (recentChannels.firstOrNull()?.id == channel.id) return
-        recentChannels.removeAll { it.id == channel.id }
-        recentChannels.add(0, channel)
-        while (recentChannels.size > MAX_RECENT) recentChannels.removeAt(recentChannels.lastIndex)
-        prefs?.edit()?.putString(recentKey(id), json.encodeToString(recentChannels.toList()))?.apply()
+    fun addRecentChannel(owner: String, channel: RecentChannel) {
+        val shown = owner == profileId
+        val list = if (shown) recentChannels.toMutableList() else readRecent(owner).toMutableList()
+        if (list.firstOrNull()?.id == channel.id) return
+        list.removeAll { it.id == channel.id }
+        list.add(0, channel)
+        while (list.size > MAX_RECENT) list.removeAt(list.lastIndex)
+        prefs?.edit()?.putString(recentKey(owner), json.encodeToString(list))?.apply()
+        if (shown) {
+            recentChannels.clear()
+            recentChannels.addAll(list)
+        }
     }
 
     fun deleteProfileData(id: String) {
@@ -86,9 +94,28 @@ object Library {
         if (profileId == id) setProfile(null)
     }
 
-    private fun persistProgress(id: String) {
-        prefs?.edit()?.putString(progressKey(id), json.encodeToString(progress.toList()))?.apply()
+    private inline fun editProgress(owner: String, change: (MutableList<WatchProgress>) -> Unit) {
+        val shown = owner == profileId
+        val list = if (shown) progress.toMutableList() else readProgress(owner).toMutableList()
+        val before = list.toList()
+        change(list)
+        if (list == before) return
+        prefs?.edit()?.putString(progressKey(owner), json.encodeToString(list))?.apply()
+        if (shown) {
+            progress.clear()
+            progress.addAll(list)
+        }
     }
+
+    private fun readProgress(id: String): List<WatchProgress> =
+        prefs?.getString(progressKey(id), null)
+            ?.let { raw -> runCatching { json.decodeFromString<List<WatchProgress>>(raw) }.getOrNull() }
+            .orEmpty()
+
+    private fun readRecent(id: String): List<RecentChannel> =
+        prefs?.getString(recentKey(id), null)
+            ?.let { raw -> runCatching { json.decodeFromString<List<RecentChannel>>(raw) }.getOrNull() }
+            .orEmpty()
 
     private fun progressKey(id: String) = "progress_$id"
     private fun recentKey(id: String) = "recent_$id"

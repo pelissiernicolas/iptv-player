@@ -33,6 +33,25 @@ Prérequis : JDK 17 et le SDK Android (API 36).
 
 L'APK est généré dans `app/build/outputs/apk/debug/app-debug.apk`.
 
+Tests unitaires et lint (également lancés par GitHub Actions à chaque push) :
+
+```bash
+./gradlew testDebugUnitTest lintDebug
+```
+
+### Signature des releases
+
+Les releases sont signées avec la clé décrite dans `keystore.properties` (fichier non versionné, à placer à la racine) :
+
+```properties
+storeFile=chemin/vers/iptv-player-release.keystore
+storePassword=…
+keyAlias=…
+keyPassword=…
+```
+
+Sans ce fichier, `assembleRelease` produit un APK **non signé**. La mise à jour automatique exige que chaque version soit signée avec la même clé : le fichier `.keystore` doit être sauvegardé.
+
 ## Structure
 
 ```
@@ -42,6 +61,9 @@ app/src/main/kotlin/fr/pelis/iptv/
 └── ui/        Écrans Compose (profils, accueil, guide, fiche film, séries)
 ```
 
-## Confidentialité
+## Confidentialité et limites
 
-Les identifiants sont stockés uniquement sur l'appareil (stockage privé de l'application, sauvegarde Android désactivée).
+- Les identifiants sont stockés uniquement sur l'appareil, chiffrés (AES-GCM) avec une clé de l'Android Keystore ; la sauvegarde Android est désactivée.
+- Beaucoup de serveurs Xtream ne fonctionnent qu'en HTTP : l'application l'accepte mais le signale, car identifiants et vidéos circulent alors en clair. Préférez `https://` quand le fournisseur le propose.
+- Le protocole Xtream place les identifiants dans les URL des flux : ils sont donc transmis au Chromecast lors d'un Cast.
+- Chromecast : le récepteur Google par défaut ne décode généralement pas le son Dolby (AC3/E-AC3) ou DTS des fichiers MKV/MP4 ; l'application prévient dans ce cas.

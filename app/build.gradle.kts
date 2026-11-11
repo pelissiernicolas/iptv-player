@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
@@ -11,19 +13,37 @@ android {
     applicationId = "fr.pelis.iptv"
     minSdk = 24
     targetSdk = 36
-    versionCode = 7
+    versionCode = 8
     // -PversionNameOverride=… : uniquement pour tester la mise à jour automatique.
-    versionName = (project.findProperty("versionNameOverride") as String?) ?: "1.3.0"
+    versionName = (project.findProperty("versionNameOverride") as String?) ?: "1.4.0"
+  }
+
+  // Clé de signature des releases : décrite dans keystore.properties (non versionné).
+  // Sans ce fichier (ex. CI), l'APK release est produit non signé : jamais signé par erreur
+  // avec une clé de debug différente de celle des versions publiées.
+  val keystoreFile = rootProject.file("keystore.properties")
+  val releaseSigning = if (keystoreFile.exists()) {
+    val props = Properties().apply { keystoreFile.inputStream().use { load(it) } }
+    signingConfigs.create("release") {
+      storeFile = file(props.getProperty("storeFile"))
+      storePassword = props.getProperty("storePassword")
+      keyAlias = props.getProperty("keyAlias")
+      keyPassword = props.getProperty("keyPassword")
+    }
+  } else {
+    null
   }
 
   buildTypes {
     release {
       isMinifyEnabled = true
       isShrinkResources = true
-      // Signée avec la clé de debug locale : installable par-dessus la version debug.
-      signingConfig = signingConfigs.getByName("debug")
+      signingConfig = releaseSigning
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
     }
+  }
+  testOptions {
+    unitTests.isReturnDefaultValues = true
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_17

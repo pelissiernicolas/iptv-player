@@ -44,7 +44,7 @@ private fun App(vm: MainViewModel) {
             is Screen.DeviceSetup -> DeviceSetupScreen(vm, s.firstLaunch)
             Screen.Profiles -> ProfilesScreen(vm)
             is Screen.EditProfile -> ProfileEditScreen(vm, s.profile)
-            Screen.Home -> stateHolder.SaveableStateProvider("home") { HomeScreen(vm) }
+            Screen.Home -> stateHolder.SaveableStateProvider("home:${vm.activeProfile?.id}") { HomeScreen(vm) }
             is Screen.Series -> SeriesScreen(vm, s.entry)
             is Screen.Movie -> MovieScreen(vm, s.entry)
             Screen.Guide -> GuideScreen(vm)

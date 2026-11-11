@@ -570,7 +570,12 @@ private fun HomeTab(vm: MainViewModel, modifier: Modifier) {
 
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 12.dp)) {
         if (progress.isNotEmpty()) {
-            item { SectionTitle("Continuer à regarder") }
+            item {
+                Column {
+                    SectionTitle("Continuer à regarder")
+                    if (vm.resuming) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+                }
+            }
             item {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
@@ -580,11 +585,11 @@ private fun HomeTab(vm: MainViewModel, modifier: Modifier) {
                         Column(
                             Modifier
                                 .width(124.dp)
-                                .tvItem(onLongPress = { Library.removeProgress(p.key) })
+                                .tvItem(onLongPress = { vm.removeProgress(p.key) })
                                 .clip(RoundedCornerShape(8.dp))
                                 .combinedClickable(
                                     onClick = { vm.resume(context, p) },
-                                    onLongClick = { Library.removeProgress(p.key) },
+                                    onLongClick = { vm.removeProgress(p.key) },
                                 ),
                         ) {
                             Box(

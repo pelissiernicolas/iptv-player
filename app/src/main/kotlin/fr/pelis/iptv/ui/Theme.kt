@@ -43,7 +43,7 @@ fun ErrorBox(message: String, onRetry: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(message, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.error)
-        Button(onClick = onRetry) {
+        Button(onClick = onRetry, modifier = Modifier.tvItem(androidx.compose.foundation.shape.CircleShape)) {
             Icon(Icons.Filled.Refresh, contentDescription = null)
             Text("  Réessayer")
         }

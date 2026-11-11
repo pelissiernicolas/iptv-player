@@ -148,7 +148,7 @@ fun ProfilesScreen(vm: MainViewModel) {
         AlertDialog(
             onDismissRequest = { toDelete = null },
             title = { Text("Supprimer « ${profile.name} » ?") },
-            text = { Text("Le profil et ses favoris seront supprimés de cet appareil.") },
+            text = { Text("Le profil, ses favoris, sa progression de lecture et son historique de chaînes seront supprimés de cet appareil.") },
             confirmButton = {
                 TextButton(onClick = { vm.deleteProfile(profile); toDelete = null }) { Text("Supprimer") }
             },

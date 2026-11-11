@@ -29,7 +29,7 @@ fun UpdateDialog(vm: MainViewModel) {
     val info = vm.update ?: return
     val context = LocalContext.current
     val progress = vm.updateProgress
-    val downloading = progress != null
+    val downloading = progress != null || vm.updateInstalling
 
     AlertDialog(
         onDismissRequest = { if (!downloading) vm.dismissUpdate(skipThisVersion = false) },
@@ -49,7 +49,10 @@ fun UpdateDialog(vm: MainViewModel) {
                         modifier = Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
                     )
                 }
-                if (progress != null) {
+                if (vm.updateInstalling) {
+                    Text("Préparation de l'installation…", style = MaterialTheme.typography.labelMedium)
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                } else if (progress != null) {
                     Text("Téléchargement… ${(progress * 100).toInt()} %", style = MaterialTheme.typography.labelMedium)
                     LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
                 }

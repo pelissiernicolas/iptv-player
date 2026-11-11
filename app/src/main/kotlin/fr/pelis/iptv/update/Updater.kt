@@ -10,8 +10,12 @@ import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
 import androidx.core.content.IntentCompat
+import android.os.Handler
+import android.os.Looper
+import fr.pelis.iptv.data.await
 import fr.pelis.iptv.data.str
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -57,16 +61,20 @@ object Updater {
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "IPTVPlayer-Updater")
             .build()
-        val body = http.newCall(request).execute().use { resp ->
+        val body = http.newCall(request).await { resp ->
             if (!resp.isSuccessful) throw IOException("GitHub a répondu HTTP ${resp.code}")
             resp.body?.string().orEmpty()
         }
         val root = json.parseToJsonElement(body) as? JsonObject ?: return@withContext null
         val version = root.str("tag_name")?.removePrefix("v")?.removePrefix("V") ?: return@withContext null
         if (!isNewer(version, current)) return@withContext null
-        val apk = (root["assets"] as? JsonArray)
+        val apks = (root["assets"] as? JsonArray)
             ?.mapNotNull { it as? JsonObject }
-            ?.firstOrNull { it.str("name")?.endsWith(".apk", ignoreCase = true) == true }
+            ?.filter { it.str("name")?.endsWith(".apk", ignoreCase = true) == true }
+            .orEmpty()
+        // Plusieurs APK : on prend celui nommé IPTV-Player-<version>.apk, sinon le seul présent.
+        val apk = apks.firstOrNull { it.str("name").equals("IPTV-Player-$version.apk", ignoreCase = true) }
+            ?: apks.singleOrNull()
             ?: return@withContext null
         val url = apk.str("browser_download_url") ?: return@withContext null
         if (!url.startsWith(DOWNLOAD_PREFIX)) return@withContext null
@@ -79,17 +87,21 @@ object Updater {
         )
     }
 
-    /** "1.10.0" > "1.9.2" ; les suffixes non numériques (ex. "-test") sont ignorés. */
+    /**
+     * "1.10.0" > "1.9.2". Une préversion ("1.4.0-beta", "1.4.0-test") est plus ancienne
+     * que la version finale correspondante.
+     */
     fun isNewer(remote: String, current: String): Boolean {
-        fun parts(v: String) = v.split('.', '-').map { p -> p.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
-        val r = parts(remote)
-        val c = parts(current)
+        fun numbers(v: String) = v.substringBefore('-').split('.').map { p -> p.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
+        val r = numbers(remote)
+        val c = numbers(current)
         for (i in 0 until maxOf(r.size, c.size)) {
             val a = r.getOrElse(i) { 0 }
             val b = c.getOrElse(i) { 0 }
             if (a != b) return a > b
         }
-        return false
+        // Mêmes numéros : seule une version finale remplace une préversion.
+        return '-' !in remote && '-' in current
     }
 
     /** Notes de version Markdown -> texte simple pour la boîte de dialogue. */
@@ -107,14 +119,21 @@ object Updater {
         .replace(Regex("\n{3,}"), "\n\n")
         .trim()
 
-    /** Télécharge l'APK dans le cache de l'application. [onProgress] reçoit 0..1. */
-    suspend fun download(context: Context, info: UpdateInfo, onProgress: (Float) -> Unit): File =
+    /**
+     * Télécharge l'APK dans le cache de l'application. [onProgress] reçoit 0..1 sur le thread
+     * principal (au plus une fois par pour-cent). Annuler la coroutine interrompt le téléchargement.
+     */
+    suspend fun download(context: Context, info: UpdateInfo, onProgress: (Float) -> Unit): File {
+        val dir = File(context.cacheDir, "updates")
+        val target = File(dir, "IPTV-Player-${info.version}.apk")
         withContext(Dispatchers.IO) {
-            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+            dir.mkdirs()
             dir.listFiles()?.forEach { it.delete() }
-            val target = File(dir, "IPTV-Player-${info.version}.apk")
-            val request = Request.Builder().url(info.apkUrl).header("User-Agent", "IPTVPlayer-Updater").build()
-            http.newCall(request).execute().use { resp ->
+        }
+        val main = Handler(Looper.getMainLooper())
+        val request = Request.Builder().url(info.apkUrl).header("User-Agent", "IPTVPlayer-Updater").build()
+        try {
+            http.newCall(request).await { resp ->
                 if (!resp.isSuccessful) throw IOException("Téléchargement refusé (HTTP ${resp.code})")
                 val body = resp.body ?: throw IOException("Réponse vide")
                 val total = body.contentLength().takeIf { it > 0 } ?: info.sizeBytes
@@ -122,18 +141,34 @@ object Updater {
                     target.outputStream().use { output ->
                         val buffer = ByteArray(64 * 1024)
                         var read = 0L
+                        var lastPercent = -1L
                         while (true) {
                             val n = input.read(buffer)
                             if (n < 0) break
                             output.write(buffer, 0, n)
                             read += n
-                            if (total > 0) withContext(Dispatchers.Main) { onProgress(read.toFloat() / total) }
+                            if (total > 0) {
+                                val percent = read * 100 / total
+                                if (percent > lastPercent) {
+                                    lastPercent = percent
+                                    val value = (read.toFloat() / total).coerceAtMost(1f)
+                                    main.post { onProgress(value) }
+                                }
+                            }
                         }
                     }
                 }
             }
-            target
+        } catch (e: Throwable) {
+            target.delete()
+            throw e
         }
+        if (info.sizeBytes > 0 && target.length() != info.sizeBytes) {
+            target.delete()
+            throw IOException("fichier incomplet")
+        }
+        return target
+    }
 
     /** Android 8+ : l'utilisateur doit autoriser l'application à installer des APK. */
     fun canInstall(context: Context): Boolean =
@@ -146,23 +181,40 @@ object Updater {
             .onFailure { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
 
-    /** Lance l'installation via le PackageInstaller d'Android (confirmation demandée à l'utilisateur). */
-    fun install(context: Context, apk: File) {
+    /**
+     * Prépare l'installation via le PackageInstaller d'Android (copie de l'APK hors du thread
+     * principal) puis la soumet : Android demande ensuite la confirmation à l'utilisateur.
+     * En cas d'échec ou d'annulation, la session est abandonnée proprement.
+     */
+    suspend fun install(context: Context, apk: File) = withContext(Dispatchers.IO) {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(context.packageName)
         }
         val sessionId = installer.createSession(params)
-        installer.openSession(sessionId).use { session ->
-            session.openWrite("base.apk", 0, apk.length()).use { out ->
-                apk.inputStream().use { it.copyTo(out) }
-                session.fsync(out)
+        try {
+            installer.openSession(sessionId).use { session ->
+                session.openWrite("base.apk", 0, apk.length()).use { out ->
+                    apk.inputStream().use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            ensureActive()
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            out.write(buffer, 0, n)
+                        }
+                    }
+                    session.fsync(out)
+                }
+                val intent = Intent(context, UpdateResultReceiver::class.java).setAction(ACTION_INSTALL_RESULT)
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+                val pending = PendingIntent.getBroadcast(context, sessionId, intent, flags)
+                session.commit(pending.intentSender)
             }
-            val intent = Intent(context, UpdateResultReceiver::class.java).setAction(ACTION_INSTALL_RESULT)
-            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
-            val pending = PendingIntent.getBroadcast(context, sessionId, intent, flags)
-            session.commit(pending.intentSender)
+        } catch (e: Throwable) {
+            runCatching { installer.abandonSession(sessionId) }
+            throw e
         }
     }
 

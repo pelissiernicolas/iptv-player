@@ -75,6 +75,7 @@ fun SeriesScreen(vm: MainViewModel, entry: MediaEntry) {
                     val saved = episodes.getOrNull(index)?.let { Library.progressFor("ep:${it.id}") }
                     vm.playEpisodes(
                         context,
+                        seriesId = entry.id,
                         seriesName = detail.name.ifBlank { entry.name },
                         seriesImage = detail.cover ?: entry.image,
                         episodes = episodes,
@@ -91,7 +92,11 @@ fun SeriesScreen(vm: MainViewModel, entry: MediaEntry) {
 @Composable
 private fun SeriesContent(detail: SeriesDetail, entry: MediaEntry, onPlay: (season: Int, index: Int) -> Unit) {
     val seasons = detail.seasons.keys.toList()
-    var selected by rememberSaveable { mutableIntStateOf(seasons.firstOrNull() ?: 1) }
+    // Saison mémorisée pour cette série uniquement ; par défaut celle du dernier épisode commencé.
+    var selected by rememberSaveable(entry.id) {
+        val started = Library.progress.firstOrNull { it.seriesId == entry.id }?.season
+        mutableIntStateOf(started?.takeIf { it in detail.seasons } ?: seasons.firstOrNull() ?: 1)
+    }
     val episodes = detail.seasons[selected].orEmpty()
 
     LazyColumn(Modifier.fillMaxSize()) {

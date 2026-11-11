@@ -11,13 +11,34 @@ class SessionStore(context: Context) {
     private val prefs = context.getSharedPreferences("iptv_session", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * true si des profils enregistrés n'ont pas pu être relus (clé Keystore perdue, données
+     * abîmées…). Ils sont mis de côté au lieu d'être effacés, et l'écran le signale.
+     */
+    var profilesUnreadable = false
+        private set
+
+    /** Profils, chiffrés avec [SecretBox] (les anciennes versions les stockaient en clair). */
     fun profiles(): List<Profile> {
         val raw = prefs.getString(KEY_PROFILES, null) ?: return migrateLegacy()
-        return runCatching { json.decodeFromString<List<Profile>>(raw) }.getOrDefault(emptyList())
+        val list = runCatching {
+            val text = if (SecretBox.isEncrypted(raw)) SecretBox.decrypt(raw) else raw
+            json.decodeFromString<List<Profile>>(text)
+        }.getOrElse {
+            profilesUnreadable = true
+            prefs.edit().putString(KEY_PROFILES_UNREADABLE, raw).remove(KEY_PROFILES).apply()
+            return emptyList()
+        }
+        // Données en clair d'une version précédente : on les chiffre tout de suite.
+        if (!SecretBox.isEncrypted(raw)) saveProfiles(list)
+        return list
     }
 
     fun saveProfiles(list: List<Profile>) {
-        prefs.edit().putString(KEY_PROFILES, json.encodeToString(list)).apply()
+        val text = json.encodeToString(list)
+        // Keystore indisponible (très rare) : on garde le fonctionnement précédent plutôt que de tout perdre.
+        val stored = runCatching { SecretBox.encrypt(text) }.getOrDefault(text)
+        prefs.edit().putString(KEY_PROFILES, stored).commit()
     }
 
     var activeProfileId: String?
@@ -71,6 +92,7 @@ class SessionStore(context: Context) {
 
     private companion object {
         const val KEY_PROFILES = "profiles"
+        const val KEY_PROFILES_UNREADABLE = "profiles_unreadable"
         const val KEY_ACTIVE = "active_profile"
         const val KEY_DEVICE_MODE = "device_mode"
     }

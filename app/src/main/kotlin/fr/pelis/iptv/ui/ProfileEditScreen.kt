@@ -31,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,7 +55,8 @@ fun ProfileEditScreen(vm: MainViewModel, editing: Profile?) {
     var name by rememberSaveable(editing?.id) { mutableStateOf(editing?.name ?: "") }
     var server by rememberSaveable(editing?.id) { mutableStateOf(editing?.server ?: "") }
     var user by rememberSaveable(editing?.id) { mutableStateOf(editing?.username ?: "") }
-    var pass by rememberSaveable(editing?.id) { mutableStateOf(editing?.password ?: "") }
+    // Mot de passe : jamais dans l'état sauvegardé par Android (remember, pas rememberSaveable).
+    var pass by remember(editing?.id) { mutableStateOf(editing?.password ?: "") }
     var showPass by rememberSaveable { mutableStateOf(false) }
     val submit = { vm.saveProfile(editing, name, server, user, pass) }
     val fieldMod = Modifier.widthIn(max = 480.dp).fillMaxWidth()
@@ -113,6 +115,15 @@ fun ProfileEditScreen(vm: MainViewModel, editing: Profile?) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
             modifier = fieldMod,
         )
+        if (XtreamClient.isCleartext(server) || (server.isNotBlank() && "://" !in server)) {
+            Text(
+                "Connexion HTTP non chiffrée : identifiants et vidéos circulent en clair sur le réseau. " +
+                    "Utilisez une adresse https:// si votre fournisseur la propose.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = fieldMod,
+            )
+        }
         OutlinedTextField(
             value = user,
             onValueChange = { user = it },

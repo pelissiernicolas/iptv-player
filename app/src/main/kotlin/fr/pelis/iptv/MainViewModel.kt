@@ -116,6 +116,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var searchJob: Job? = null
     private var seriesJob: Job? = null
     private var accountJob: Job? = null
+    private var loginJob: Job? = null
 
     // Type d'appareil
     /** Mode Téléviseur : navigation à la télécommande. */
@@ -126,6 +127,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         Library.init(app)
+        if (store.profilesUnreadable) {
+            Toast.makeText(
+                app,
+                "Les profils enregistrés n'ont pas pu être relus sur cet appareil : ajoutez à nouveau votre compte.",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
         if (store.deviceMode == null) {
             // Premier démarrage : on demande d'abord le type d'appareil.
             screen = Screen.DeviceSetup(firstLaunch = true)
@@ -141,6 +149,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var update by mutableStateOf<UpdateInfo?>(null); private set
     /** Progression du téléchargement (0..1), null si aucun téléchargement en cours. */
     var updateProgress by mutableStateOf<Float?>(null); private set
+    /** true pendant la préparation de l'installation (après le téléchargement). */
+    var updateInstalling by mutableStateOf(false); private set
     var updateError by mutableStateOf<String?>(null); private set
     var checkingUpdate by mutableStateOf(false); private set
     private var updateJob: Job? = null
@@ -187,16 +197,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         updateError = null
         updateProgress = 0f
         updateJob = viewModelScope.launch {
+            var step = "du téléchargement"
             try {
-                val apk = Updater.download(getApplication(), info) { updateProgress = it }
+                val apk = Updater.download(getApplication(), info) { if (updateJob?.isActive == true) updateProgress = it }
+                step = "de la préparation de l'installation"
+                updateInstalling = true
                 Updater.install(getApplication(), apk)
+                // La suite (confirmation Android) est affichée par le système.
                 update = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                updateError = "Échec du téléchargement : ${e.message ?: e.javaClass.simpleName}"
+                updateError = "Échec $step : ${e.message ?: e.javaClass.simpleName}"
             } finally {
                 updateProgress = null
+                updateInstalling = false
             }
         }
     }
@@ -268,12 +283,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun cancelEdit() {
+        loginJob?.cancel()
+        loginBusy = false
         loginError = null
         screen = if (profiles.isEmpty()) Screen.EditProfile(null) else Screen.Profiles
     }
 
     /** Vérifie les identifiants auprès du serveur, enregistre le profil puis l'ouvre. */
     fun saveProfile(editing: Profile?, name: String, server: String, username: String, password: String) {
+        if (loginBusy) return
         if (server.isBlank() || username.isBlank() || password.isEmpty()) {
             loginError = "Remplissez tous les champs"
             return
@@ -288,7 +306,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
         loginBusy = true
         loginError = null
-        viewModelScope.launch {
+        loginJob = viewModelScope.launch {
             try {
                 val info = XtreamClient(profile.credentials()).login()
                 profiles = if (editing != null) profiles.map { if (it.id == profile.id) profile else it }
@@ -548,28 +566,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Charge le guide d'une chaîne (appelé quand elle devient visible à l'écran).
-     * Fonction suspendue : annulée si la ligne sort de l'écran avant d'être servie.
+     * Guide d'une chaîne, tant qu'elle est visible à l'écran : chargé à l'apparition de la
+     * ligne, puis rafraîchi à la fin du programme en cours. Fonction suspendue : elle
+     * s'arrête (requête comprise) quand la ligne sort de l'écran.
      */
     suspend fun loadEpg(entry: MediaEntry) {
         if (entry.type != ContentType.LIVE) return
+        // Sans identifiant EPG, les serveurs Xtream ne renvoient pas de programme pour la chaîne.
         if (entry.epgId.isNullOrBlank()) {
             if (epg[entry.id] == null) epg[entry.id] = emptyList()
             return
         }
-        val c = client ?: return
-        val now = System.currentTimeMillis()
-        val fetched = epgFetchedAt[entry.id]
-        if (fetched != null && now - fetched < EPG_TTL_MS) return
-        epgFetchedAt[entry.id] = now
-        try {
-            val programs = epgSemaphore.withPermit { c.shortEpg(entry.id) }
-            epg[entry.id] = programs
-        } catch (e: CancellationException) {
-            epgFetchedAt.remove(entry.id)
-            throw e
-        } catch (_: Exception) {
-            epg[entry.id] = emptyList()
+        while (true) {
+            val c = client ?: return
+            val wait = epgFetchedAt[entry.id]?.let { it - System.currentTimeMillis() } ?: 0L
+            if (wait > 0) delay(wait)
+            if (client !== c) return
+            val next = try {
+                val programs = epgSemaphore.withPermit { c.shortEpg(entry.id) }
+                epg[entry.id] = programs
+                // Prochain rafraîchissement : fin du programme en cours (au plus tard dans 20 min).
+                val now = System.currentTimeMillis()
+                val end = programs.firstOrNull { it.end > now }?.end ?: (now + EPG_TTL_MS)
+                (end + 5_000L).coerceIn(now + 60_000L, now + EPG_TTL_MS)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Erreur : on garde l'éventuel guide déjà affiché et on retente plus tôt.
+                if (epg[entry.id] == null) epg[entry.id] = emptyList()
+                System.currentTimeMillis() + EPG_RETRY_MS
+            }
+            epgFetchedAt[entry.id] = next
         }
     }
 
@@ -582,6 +609,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun playLive(context: Context, channels: List<MediaEntry>, index: Int) {
         val c = client ?: return
+        val owner = activeProfile?.id ?: return
         val items = channels.map {
             PlayItem(
                 title = it.name,
@@ -593,11 +621,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 epgId = it.epgId,
             )
         }
-        PlaylistHolder.play(context, items, index)
+        PlaylistHolder.play(context, owner, items, index)
     }
 
     fun playVod(context: Context, entry: MediaEntry, extension: String?, startPositionMs: Long = -1) {
         val c = client ?: return
+        val owner = activeProfile?.id ?: return
         val ext = extension ?: entry.extension
         val item = PlayItem(
             title = entry.name,
@@ -608,11 +637,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             kind = "vod",
             extension = ext,
         )
-        PlaylistHolder.play(context, listOf(item), 0, startPositionMs)
+        PlaylistHolder.play(context, owner, listOf(item), 0, startPositionMs)
     }
 
     fun playEpisodes(
         context: Context,
+        seriesId: String?,
         seriesName: String,
         seriesImage: String?,
         episodes: List<Episode>,
@@ -620,6 +650,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         startPositionMs: Long = -1,
     ) {
         val c = client ?: return
+        val owner = activeProfile?.id ?: return
         val items = episodes.map {
             val label = "S${it.season} E${it.number} · ${it.title}"
             PlayItem(
@@ -632,14 +663,59 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 extension = it.extension,
                 libraryTitle = seriesName,
                 librarySubtitle = label,
+                seriesId = seriesId,
+                season = it.season,
             )
         }
-        PlaylistHolder.play(context, items, index, startPositionMs)
+        PlaylistHolder.play(context, owner, items, index, startPositionMs)
     }
 
-    /** Reprend un film / épisode depuis « Continuer à regarder ». */
+    fun removeProgress(key: String) {
+        val owner = activeProfile?.id ?: return
+        Library.removeProgress(owner, key)
+    }
+
+    /** true pendant le chargement de la saison d'un épisode à reprendre. */
+    var resuming by mutableStateOf(false); private set
+
+    /**
+     * Reprend un film / épisode depuis « Continuer à regarder ». Pour un épisode, toute la
+     * saison est rechargée afin d'enchaîner sur les épisodes suivants, comme depuis la fiche série.
+     */
     fun resume(context: Context, progress: WatchProgress) {
         val c = client ?: return
+        val seriesId = progress.seriesId
+        if (progress.kind == "episode" && seriesId != null) {
+            if (resuming) return
+            resuming = true
+            viewModelScope.launch {
+                val detail = try {
+                    c.seriesInfo(seriesId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                } finally {
+                    resuming = false
+                }
+                val episodes = detail?.seasons?.get(progress.season ?: -1)
+                val index = episodes?.indexOfFirst { it.id == progress.contentId } ?: -1
+                if (detail != null && episodes != null && index >= 0) {
+                    playEpisodes(
+                        context, seriesId, progress.title, detail.cover ?: progress.image,
+                        episodes, index, progress.position,
+                    )
+                } else {
+                    resumeSingle(c, context, progress)
+                }
+            }
+            return
+        }
+        resumeSingle(c, context, progress)
+    }
+
+    private fun resumeSingle(c: XtreamClient, context: Context, progress: WatchProgress) {
+        val owner = activeProfile?.id ?: return
         val url = if (progress.kind == "episode") c.episodeUrl(progress.contentId, progress.extension ?: "mp4")
         else c.vodUrl(progress.contentId, progress.extension)
         val item = PlayItem(
@@ -652,11 +728,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             extension = progress.extension,
             libraryTitle = progress.title,
             librarySubtitle = progress.subtitle,
+            seriesId = progress.seriesId,
+            season = progress.season,
         )
-        PlaylistHolder.play(context, listOf(item), 0, progress.position)
+        PlaylistHolder.play(context, owner, listOf(item), 0, progress.position)
     }
 
     private companion object {
         const val EPG_TTL_MS = 20 * 60_000L
+        const val EPG_RETRY_MS = 2 * 60_000L
     }
 }

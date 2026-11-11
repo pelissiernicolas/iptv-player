@@ -52,7 +52,7 @@ class XtreamClient(val credentials: Credentials) {
             ContentType.VOD -> "get_vod_categories"
             ContentType.SERIES -> "get_series_categories"
         }
-        val arr = call(action) as? JsonArray ?: return emptyList()
+        val arr = call(action).asListOrFail()
         return arr.mapNotNull { el ->
             val o = el as? JsonObject ?: return@mapNotNull null
             val id = o.str("category_id") ?: return@mapNotNull null
@@ -68,7 +68,7 @@ class XtreamClient(val credentials: Credentials) {
             ContentType.SERIES -> "get_series"
         }
         val el = if (categoryId != null) call(action, "category_id" to categoryId) else call(action)
-        val arr = el as? JsonArray ?: return emptyList()
+        val arr = el.asListOrFail()
         return withContext(Dispatchers.Default) {
             arr.mapNotNull { (it as? JsonObject)?.let { o -> toEntry(o, type) } }
         }
@@ -209,35 +209,49 @@ class XtreamClient(val credentials: Credentials) {
         )
     }
 
-    private suspend fun call(action: String?, vararg params: Pair<String, String>): JsonElement =
-        withContext(Dispatchers.IO) {
-            val url = "$base/player_api.php".toHttpUrlOrNull()?.newBuilder()?.apply {
-                addQueryParameter("username", credentials.username)
-                addQueryParameter("password", credentials.password)
-                if (action != null) addQueryParameter("action", action)
-                params.forEach { (k, v) -> addQueryParameter(k, v) }
-            }?.build() ?: throw XtreamException("Adresse du serveur invalide")
+    private suspend fun call(action: String?, vararg params: Pair<String, String>): JsonElement {
+        val url = "$base/player_api.php".toHttpUrlOrNull()?.newBuilder()?.apply {
+            addQueryParameter("username", credentials.username)
+            addQueryParameter("password", credentials.password)
+            if (action != null) addQueryParameter("action", action)
+            params.forEach { (k, v) -> addQueryParameter(k, v) }
+        }?.build() ?: throw XtreamException("Adresse du serveur invalide")
 
-            val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
-            val body = try {
-                http.newCall(request).execute().use { resp ->
-                    when {
-                        resp.code == 401 || resp.code == 403 ->
-                            throw XtreamException("Accès refusé par le serveur (HTTP ${resp.code})")
-                        !resp.isSuccessful -> throw XtreamException("Erreur serveur (HTTP ${resp.code})")
-                    }
-                    resp.body?.string().orEmpty()
+        val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
+        // Annulable : la requête est interrompue si l'écran n'en a plus besoin.
+        val body = try {
+            http.newCall(request).await { resp ->
+                when {
+                    resp.code == 401 || resp.code == 403 ->
+                        throw XtreamException("Accès refusé par le serveur (HTTP ${resp.code})")
+                    !resp.isSuccessful -> throw XtreamException("Erreur serveur (HTTP ${resp.code})")
                 }
-            } catch (e: IOException) {
-                throw XtreamException("Connexion impossible : ${e.message ?: e.javaClass.simpleName}")
+                resp.body?.string().orEmpty()
             }
-            if (body.isBlank()) return@withContext JsonArray(emptyList())
+        } catch (e: IOException) {
+            throw XtreamException("Connexion impossible : ${e.message ?: e.javaClass.simpleName}")
+        }
+        if (body.isBlank()) return JsonArray(emptyList())
+        return withContext(Dispatchers.Default) {
             try {
                 json.parseToJsonElement(body)
             } catch (e: Exception) {
                 throw XtreamException("Réponse invalide du serveur")
             }
         }
+    }
+
+    /** Liste attendue : une réponse d'un autre type (objet d'erreur…) est signalée, pas affichée comme vide. */
+    private fun JsonElement.asListOrFail(): JsonArray = when (this) {
+        is JsonArray -> this
+        is JsonObject -> when {
+            isEmpty() -> JsonArray(emptyList())
+            // Certains panneaux renvoient {"1": {...}, "2": {...}} au lieu d'un tableau.
+            "user_info" !in this && values.all { it is JsonObject } -> JsonArray(values.toList())
+            else -> throw XtreamException("Réponse inattendue du serveur")
+        }
+        else -> JsonArray(emptyList())
+    }
 
     companion object {
         const val USER_AGENT = "IPTVPlayer/1.0 (Linux; Android)"
@@ -251,7 +265,13 @@ class XtreamClient(val credentials: Credentials) {
             .followSslRedirects(true)
             .build()
 
-        /** "exemple.com:8080/" -> "http://exemple.com:8080" */
+        /** true si l'adresse n'est pas chiffrée (identifiants et flux lisibles sur le réseau). */
+        fun isCleartext(server: String) = server.trim().startsWith("http://", ignoreCase = true)
+
+        /**
+         * "exemple.com:8080/" -> "http://exemple.com:8080". Sans schéma, HTTP est utilisé car
+         * la plupart des serveurs Xtream n'acceptent que lui ; l'écran du profil le signale.
+         */
         fun normalizeServer(input: String): String {
             var s = input.trim()
             if (!s.startsWith("http://", true) && !s.startsWith("https://", true)) s = "http://$s"
@@ -268,9 +288,18 @@ class XtreamClient(val credentials: Credentials) {
             val user = url.queryParameter("username")
             val pass = url.queryParameter("password")
             if (user.isNullOrBlank() || pass.isNullOrEmpty()) return null
-            val defaultPort = if (url.scheme == "https") 443 else 80
-            val port = if (url.port != defaultPort) ":${url.port}" else ""
-            return Credentials("${url.scheme}://${url.host}$port", user, pass)
+            // On garde un éventuel sous-chemin (ex. https://hote/iptv/get.php -> https://hote/iptv).
+            val segments = url.pathSegments.filter { it.isNotEmpty() }
+            val baseSegments = if (segments.lastOrNull()?.contains('.') == true) segments.dropLast(1) else segments
+            val server = url.newBuilder()
+                .query(null)
+                .fragment(null)
+                .encodedPath("/")
+                .apply { baseSegments.forEach { addPathSegment(it) } }
+                .build()
+                .toString()
+                .trimEnd('/')
+            return Credentials(server, user, pass)
         }
     }
 }
