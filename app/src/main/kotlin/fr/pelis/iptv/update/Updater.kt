@@ -105,7 +105,9 @@ object Updater {
     }
 
     /** Notes de version Markdown -> texte simple pour la boîte de dialogue. */
-    private fun cleanNotes(markdown: String): String = markdown.lines()
+    internal fun cleanNotes(markdown: String): String = markdown.lines()
+        // « Téléchargez … ci-dessous » s'adresse aux visiteurs de la page GitHub, pas à l'application.
+        .filterNot { it.trimStart().startsWith("Téléchargez") }
         .map { line ->
             line.trimEnd()
                 .replace(Regex("^#+\\s*"), "")

@@ -3,6 +3,8 @@ package fr.pelis.iptv.ui
 import android.content.ActivityNotFoundException
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.clickable
 import fr.pelis.iptv.transfer.PhoneLinkServer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,6 +55,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -556,34 +559,50 @@ private fun AccountDialog(
                     InfoRow("Connexions", "${account.activeConnections ?: "?"} / ${account.maxConnections ?: "?"}")
                 }
                 server?.let { InfoRow("Serveur", it) }
-                TextButton(onClick = onRefreshCatalog, contentPadding = PaddingValues(0.dp)) {
-                    Text("Actualiser le catalogue (chaînes, films, séries)")
-                }
+                DialogLink("Actualiser le catalogue", onRefreshCatalog)
                 if (tvMode) {
                     // Téléviseur : pas de gestionnaire de fichiers, l'échange passe par un téléphone.
-                    TextButton(onClick = onPhoneBackup, contentPadding = PaddingValues(0.dp)) {
-                        Text("Sauvegarde via un téléphone (QR code)")
-                    }
+                    DialogLink("Sauvegarde via un téléphone (QR code)", onPhoneBackup)
                 } else {
-                    TextButton(onClick = onExport, contentPadding = PaddingValues(0.dp)) {
-                        Text("Exporter favoris et historique")
-                    }
-                    TextButton(onClick = onImport, contentPadding = PaddingValues(0.dp)) {
-                        Text("Importer une sauvegarde")
-                    }
+                    DialogLink("Exporter favoris et historique", onExport)
+                    DialogLink("Importer une sauvegarde", onImport)
                 }
+                Spacer(Modifier.height(4.dp))
                 InfoRow("Appareil", if (tvMode) "Téléviseur" else "Smartphone / tablette")
-                TextButton(onClick = onChangeDevice, contentPadding = PaddingValues(0.dp)) {
-                    Text("Changer le type d'appareil")
-                }
+                DialogLink("Changer le type d'appareil", onChangeDevice)
+                Spacer(Modifier.height(4.dp))
                 InfoRow("Application", "IPTV Player $appVersion")
-                TextButton(onClick = onCheckUpdate, enabled = !checkingUpdate, contentPadding = PaddingValues(0.dp)) {
-                    Text(if (checkingUpdate) "Recherche en cours…" else "Rechercher une mise à jour")
-                }
+                DialogLink(
+                    if (checkingUpdate) "Recherche en cours…" else "Rechercher une mise à jour",
+                    onCheckUpdate,
+                    enabled = !checkingUpdate,
+                )
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Fermer") } },
         dismissButton = { TextButton(onClick = onSwitchProfile) { Text("Changer de profil") } },
+    )
+}
+
+/**
+ * Action sous forme de lien dans une fenêtre : texte aligné sur les autres lignes, jamais
+ * rogné, sur plusieurs lignes si besoin (un TextButton sans marge coupait les lettres au bord).
+ */
+@Composable
+private fun DialogLink(text: String, onClick: () -> Unit, enabled: Boolean = true) {
+    val shape = RoundedCornerShape(8.dp)
+    Text(
+        text,
+        color = MaterialTheme.colorScheme.primary.copy(alpha = if (enabled) 1f else 0.5f),
+        // Même taille que les lignes d'information de la fenêtre.
+        style = LocalTextStyle.current,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .fillMaxWidth()
+            .tvItem(shape)
+            .clip(shape)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(vertical = 6.dp),
     )
 }
 

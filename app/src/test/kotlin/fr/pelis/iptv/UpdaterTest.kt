@@ -33,6 +33,12 @@ class UpdaterTest {
         assertFalse(Updater.isNewer("1.4.0-beta", "1.4.0"))
         assertTrue(Updater.isNewer("1.5.0-beta", "1.4.0"))
     }
+
+    @Test
+    fun notesForTheApp() {
+        val notes = "## Android TV\n- **Profils** : [voir](https://x)\n\nTéléchargez **IPTV-Player-1.4.10.apk** ci-dessous."
+        assertEquals("Android TV\n• Profils : voir", Updater.cleanNotes(notes))
+    }
 }
 
 class ProgressTest {

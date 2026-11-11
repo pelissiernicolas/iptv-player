@@ -2,6 +2,9 @@ package fr.pelis.iptv.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
@@ -24,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import fr.pelis.iptv.MainViewModel
 
 /** Fenêtre « Mise à jour disponible », affichée par-dessus n'importe quel écran. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun UpdateDialog(vm: MainViewModel) {
     val info = vm.update ?: return
@@ -46,7 +50,7 @@ fun UpdateDialog(vm: MainViewModel) {
                     Text(
                         info.notes,
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
+                        modifier = Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState()),
                     )
                 }
                 if (vm.updateInstalling) {
@@ -61,21 +65,27 @@ fun UpdateDialog(vm: MainViewModel) {
                 }
             }
         },
+        // Tous les boutons dans un seul bloc : la zone de boutons d'AlertDialog ne sait pas placer
+        // une colonne à côté d'un bouton (le dernier sortait de la fenêtre sur téléphone).
         confirmButton = {
-            Button(
-                onClick = { vm.startUpdate(context) },
-                enabled = !downloading,
-                modifier = Modifier.tvItem(CircleShape),
-            ) { Text(if (downloading) "Téléchargement…" else "Mettre à jour") }
-        },
-        dismissButton = {
-            Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
-                TextButton(onClick = { vm.dismissUpdate(skipThisVersion = false) }, modifier = Modifier.tvItem(CircleShape)) {
-                    Text(if (downloading) "Annuler" else "Plus tard")
-                }
-                if (!downloading) {
-                    TextButton(onClick = { vm.dismissUpdate(skipThisVersion = true) }, modifier = Modifier.tvItem(CircleShape)) {
-                        Text("Ignorer cette version")
+            Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Button(
+                    onClick = { vm.startUpdate(context) },
+                    enabled = !downloading,
+                    modifier = Modifier.tvItem(CircleShape),
+                ) { Text(if (downloading) "Téléchargement…" else "Mettre à jour") }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End)) {
+                    if (!downloading) {
+                        TextButton(onClick = { vm.dismissUpdate(skipThisVersion = true) }, modifier = Modifier.tvItem(CircleShape)) {
+                            Text("Ignorer cette version")
+                        }
+                    }
+                    TextButton(onClick = { vm.dismissUpdate(skipThisVersion = false) }, modifier = Modifier.tvItem(CircleShape)) {
+                        Text(if (downloading) "Annuler" else "Plus tard")
                     }
                 }
             }
