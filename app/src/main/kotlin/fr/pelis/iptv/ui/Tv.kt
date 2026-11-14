@@ -97,6 +97,13 @@ fun Modifier.tvFocusAlways(
                         longPressFired = false
                         true
                     }
+                    // Télécommandes qui ne répètent pas la touche OK : appui long reconnu à
+                    // sa durée, au relâchement.
+                    event.type == KeyEventType.KeyUp &&
+                        native.eventTime - native.downTime >= LONG_PRESS_MS -> {
+                        onLongPress()
+                        true
+                    }
                     else -> false
                 }
                 KeyEvent.KEYCODE_MENU -> {
@@ -146,3 +153,6 @@ fun Modifier.rememberFocus(key: String): Modifier {
         }
     }
 }
+
+/** Durée d'un appui long sur OK quand la télécommande ne répète pas la touche. */
+private const val LONG_PRESS_MS = 600L

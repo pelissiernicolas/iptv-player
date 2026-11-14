@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -416,13 +417,18 @@ private fun ChannelList(
     onLongClick: (MediaEntry) -> Unit,
 ) {
     val now by rememberNow()
+    val tv = LocalTvMode.current
     val keys = remember(items) { uniqueKeys(items.map { "live:${it.id}" }) }
     LazyColumn(contentPadding = PaddingValues(vertical = 4.dp)) {
         itemsIndexed(items, key = { i, _ -> keys[i] }) { index, entry ->
             LaunchedEffect(entry.id) { loadEpg(entry) }
+            val favorite = entry.id in favorites
+            // Téléviseur : l'étoile est un bouton à part, à droite de la chaîne (flèche droite
+            // puis OK) ; l'appui long sur OK n'est pas fiable sur toutes les télécommandes.
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(
                 Modifier
-                    .fillMaxWidth()
+                    .weight(1f)
                     .rememberFocus(keys[index])
                     .tvItem(onLongPress = { onLongClick(entry) })
                     .combinedClickable(onClick = { onClick(index) }, onLongClick = { onLongClick(entry) })
@@ -448,9 +454,22 @@ private fun ChannelList(
                     Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     NowNext(epg[entry.id], now)
                 }
-                if (entry.id in favorites) {
+                if (favorite && !tv) {
                     Icon(Icons.Filled.Star, "Favori", tint = Color(0xFFFFC107), modifier = Modifier.size(20.dp))
                 }
+            }
+            if (tv) {
+                IconButton(
+                    onClick = { onLongClick(entry) },
+                    modifier = Modifier.padding(end = 8.dp).tvItem(CircleShape),
+                ) {
+                    Icon(
+                        if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        contentDescription = if (favorite) "Retirer des favoris" else "Ajouter aux favoris",
+                        tint = if (favorite) Color(0xFFFFC107) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                }
+            }
             }
         }
     }
