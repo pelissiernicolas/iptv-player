@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     tags:
-      - 'v*'
+      - 'windows-v*'
     paths:
       - 'desktop/**'
       - '.github/workflows/windows.yml'
@@ -92,8 +92,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publier sur la release GitHub
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: Publier la release Windows
+    if: startsWith(github.ref, 'refs/tags/windows-v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -107,7 +107,7 @@ jobs:
           path: release
           merge-multiple: true
 
-      - name: Joindre les archives à la release
+      - name: Créer la release et y joindre les archives
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -115,24 +115,25 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
+          VERSION="${TAG#windows-v}"
           CARGO_VERSION=$(sed -n 's/^version *= *"\(.*\)"/\1/p' desktop/Cargo.toml | head -n1)
-          # La version Windows suit sa propre numérotation : on ne publie que si le tag la vise.
           if [ "$CARGO_VERSION" != "$VERSION" ]; then
-            echo "Tag $TAG ≠ version Windows $CARGO_VERSION : rien à publier."
-            exit 0
+            echo "::error::Tag $TAG mais version $CARGO_VERSION dans desktop/Cargo.toml"
+            exit 1
           fi
-          # La release peut être créée par la CI Android en parallèle : on l'attend, sinon on la crée.
-          for i in $(seq 1 30); do
-            if gh release view "$TAG" >/dev/null 2>&1; then break; fi
-            if [ "$i" = 30 ]; then
-              NOTES="release-notes/${VERSION}.md"
-              if [ -f "$NOTES" ]; then
-                gh release create "$TAG" --title "IPTV Player ${VERSION} – $(head -n1 "$NOTES" | sed 's/^# *//')" --notes "$(tail -n +2 "$NOTES")"
-              else
-                gh release create "$TAG" --title "IPTV Player ${VERSION}" --generate-notes
-              fi
-            fi
-            sleep 30
-          done
-          gh release upload "$TAG" release/*.zip --clobber
+          # Notes : desktop/release-notes/<version>.md (1re ligne « # Titre », puis le texte
+          # affiché dans la release et dans la fenêtre de mise à jour).
+          NOTES="desktop/release-notes/${VERSION}.md"
+          if [ -f "$NOTES" ]; then
+            TITLE="IPTV Player Windows ${VERSION} – $(head -n1 "$NOTES" | sed 's/^# *//')"
+            tail -n +2 "$NOTES" > body.md
+          else
+            TITLE="IPTV Player Windows ${VERSION}"
+            echo "Corrections et améliorations." > body.md
+          fi
+          {
+            echo
+            echo "Téléchargez **IPTV-Player-${VERSION}-windows-x64.zip** (PC Intel/AMD) ou **-arm64.zip** (PC Snapdragon), ou acceptez la mise à jour proposée dans l'application."
+          } >> body.md
+          # --latest=false : la « dernière release » reste celle d'Android (mise à jour de l'APK).
+          gh release create "$TAG" release/*.zip --title "$TITLE" --notes-file body.md --latest=false
