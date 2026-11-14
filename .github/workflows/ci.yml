@@ -131,17 +131,20 @@ jobs:
           set -euo pipefail
 
           APK="app/build/outputs/apk/release/app-release.apk"
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
 
           # Sorties capturées entières : pas de « | head » qui couperait le tuyau (pipefail).
-          CERTS=$("$BT/apksigner" verify --print-certs "$APK")
-          CERT=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$CERTS")
-          if [ "$CERT" != "$EXPECTED_CERT_SHA256" ]; then
-            echo "::error::APK signé avec une autre clé que celle des versions publiées ($CERT)"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK" 2>&1)
+          # Toutes les empreintes SHA-256 de certificat affichées (format variable selon la version).
+          DIGESTS=$(grep -ioE 'SHA-256 digest: *[0-9a-f]{64}' <<< "$CERTS" | grep -ioE '[0-9a-f]{64}' | tr 'A-F' 'a-f' | sort -u || true)
+          if [ "$DIGESTS" != "$EXPECTED_CERT_SHA256" ]; then
+            grep -i 'digest' <<< "$CERTS" || true
+            echo "::error::APK signé avec une autre clé que celle des versions publiées"
             exit 1
           fi
 
-          DUMP=$("$BT/aapt2" dump badging "$APK")
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)
+          DUMP=$("$AAPT2" dump badging "$APK")
           BADGING=$(grep -m1 '^package:' <<< "$DUMP")
           NAME=$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<< "$BADGING")
           CODE=$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<< "$BADGING")
