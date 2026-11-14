@@ -539,6 +539,16 @@ impl VideoRenderer {
             }
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_fbo);
             gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_fbo);
+            // La copie transmet aussi le canal alpha de l'image de mpv (0 en rendu logiciel
+            // « rgb0 ») : Windows afficherait alors la zone vidéo comme transparente, donc noire.
+            // On force l'opacité sur toute la zone, sans toucher aux couleurs.
+            gl.enable(glow::SCISSOR_TEST);
+            gl.scissor(x, y, w, h);
+            gl.color_mask(false, false, false, true);
+            gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
+            gl.color_mask(true, true, true, true);
+            gl.disable(glow::SCISSOR_TEST);
             (self.mpv.api.render_report_swap)(self.ctx);
         }
     }

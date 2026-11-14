@@ -723,8 +723,9 @@ impl Player {
         };
         s.paused = paused;
         let overlay = now < s.overlay_until || paused || s.error.is_some() || s.show_channels || s.cast_picker;
-        // Le curseur n'est pas masqué : sur certains pilotes graphiques (PC ARM notamment),
-        // un curseur caché s'affiche comme un carré noir au-dessus de la vidéo.
+        if !overlay && video.contains_pointer() {
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+        }
         if now < s.overlay_until {
             ctx.request_repaint_after(s.overlay_until - now);
         }
