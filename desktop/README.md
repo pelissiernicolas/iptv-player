@@ -58,7 +58,17 @@ cargo run
 .\scripts\package.ps1 -Arch x64
 ```
 
-La CI GitHub (`.github/workflows/windows.yml`) compile et teste les deux architectures ; sur un tag `vX.Y.Z` égal à la version de `Cargo.toml`, les archives sont jointes à la release (la mise à jour automatique les y cherche).
+La CI GitHub (`.github/workflows/windows.yml`) compile et teste les deux architectures.
+
+### Publier une version
+
+Les versions Windows ont leurs propres releases, séparées de celles d'Android (tags `v…`) :
+
+1. mettre la nouvelle version dans `Cargo.toml` (`version = "X.Y.Z"`) ;
+2. écrire `release-notes/X.Y.Z.md` (1re ligne `# Titre`, puis les nouveautés) ;
+3. pousser le tag : `git tag windows-vX.Y.Z` puis `git push origin windows-vX.Y.Z`.
+
+La CI crée la release « IPTV Player Windows X.Y.Z » avec les archives x64 et ARM64, sans la marquer comme « dernière release » (celle-ci reste la version Android, que l'APK consulte). La mise à jour automatique de l'application cherche les releases `windows-v…`.
 
 Diagnostic : la variable d'environnement `IPTV_MPV_LOG=chemin\mpv.log` écrit le journal de mpv (il contient les adresses des flux, donc vos identifiants).
 
