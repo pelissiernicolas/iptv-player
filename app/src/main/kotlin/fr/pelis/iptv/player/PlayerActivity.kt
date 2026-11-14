@@ -171,6 +171,11 @@ class PlayerActivity : FragmentActivity() {
     private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
     private val hideZapOverlay = Runnable { zapOverlay.visibility = View.GONE }
 
+    /** Bandeau du haut affiché seul (sans les commandes) : masqué après [OVERLAY_TIMEOUT_MS]. */
+    private val hideTopBar = Runnable {
+        if (!playerView.isControllerFullyVisible) topBar.visibility = View.GONE
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         newContentRequested = savedInstanceState == null
@@ -212,6 +217,8 @@ class PlayerActivity : FragmentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(20.dp, 10.dp, 12.dp, 10.dp)
+            // Suit l'affichage des commandes du lecteur (voir setControllerVisibilityListener).
+            visibility = View.GONE
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP,
             )
@@ -252,7 +259,10 @@ class PlayerActivity : FragmentActivity() {
             keepScreenOn = true
             setShowSubtitleButton(true)
             setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
+            // Commandes, titre et boutons du haut disparaissent seuls après quelques secondes.
+            controllerShowTimeoutMs = OVERLAY_TIMEOUT_MS.toInt()
             setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
+                handler.removeCallbacks(hideTopBar)
                 topBar.visibility = if (inPip) View.GONE else visibility
                 if (visibility != View.VISIBLE) hideSystemUi()
             })
@@ -612,6 +622,7 @@ class PlayerActivity : FragmentActivity() {
         playerView.player = exo
         player = exo
         onItemChanged()
+        showTopBarBriefly()
         updatePipParams()
         handler.postDelayed(progressSaver, 10_000)
     }
@@ -909,6 +920,14 @@ class PlayerActivity : FragmentActivity() {
         }
     }
 
+    /** Titre affiché au lancement, puis masqué après quelques secondes. */
+    private fun showTopBarBriefly() {
+        if (inPip || playerView.isControllerFullyVisible) return
+        topBar.visibility = View.VISIBLE
+        handler.removeCallbacks(hideTopBar)
+        handler.postDelayed(hideTopBar, OVERLAY_TIMEOUT_MS)
+    }
+
     /** Bandeau « numéro + nom de chaîne » affiché 3 s après un changement de chaîne. */
     private fun showZapOverlay(index: Int) {
         zapOverlay.text = "${index + 1}  ${items[index].title}"
@@ -1138,6 +1157,8 @@ class PlayerActivity : FragmentActivity() {
         const val STATE_POSITION = "player_position"
         const val STATE_PLAYING = "player_playing"
         const val CAST_JOIN_TIMEOUT_MS = 3_000L
+        /** Durée d'affichage du titre et des commandes sans action de l'utilisateur. */
+        const val OVERLAY_TIMEOUT_MS = 3_500L
 
         /** Formats audio que le récepteur Cast par défaut ne décode pas dans un fichier (MKV, MP4…). */
         val CAST_UNSUPPORTED_AUDIO = mapOf(
