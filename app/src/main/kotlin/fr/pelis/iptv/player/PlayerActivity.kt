@@ -50,6 +50,8 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -68,6 +70,7 @@ import fr.pelis.iptv.data.Library
 import fr.pelis.iptv.data.SessionStore
 import fr.pelis.iptv.data.RecentChannel
 import fr.pelis.iptv.data.WatchProgress
+import fr.pelis.iptv.data.HttpsDowngradeException
 import fr.pelis.iptv.data.XtreamClient
 
 /**
@@ -430,6 +433,9 @@ class PlayerActivity : FragmentActivity() {
      * - la TV lit autre chose -> on n'y touche pas et on demande à l'utilisateur.
      * L'état de la TV peut arriver après coup : attente de [CAST_JOIN_TIMEOUT_MS] au plus.
      */
+    /** La TV n'a pas donné son état à temps (et non : elle lit autre chose). */
+    private var foreignUnknown = false
+
     private fun startCastJoin() {
         val c = castPlayer ?: return
         castLink = CastLink.WAITING
@@ -457,9 +463,14 @@ class PlayerActivity : FragmentActivity() {
             }
             return true
         }
-        // File vide : on attend que l'état de la TV soit connu (ou le délai écoulé).
-        if (timedOut || remoteKnownIdle()) {
+        // File vide : on attend que l'état de la TV soit connu.
+        if (remoteKnownIdle()) {
             loadOnCast(resumeIndex, resumePosition)
+            return true
+        }
+        // Délai écoulé sans état : la TV lit peut-être autre chose, on demande avant d'envoyer.
+        if (timedOut) {
+            enterForeign(unknown = true)
             return true
         }
         return false
@@ -483,11 +494,17 @@ class PlayerActivity : FragmentActivity() {
         handler.postDelayed(progressSaver, 5_000)
     }
 
-    private fun enterForeign() {
+    /** [unknown] : le Chromecast n'a pas donné son état à temps (rien n'est envoyé sans accord). */
+    private fun enterForeign(unknown: Boolean = false) {
         handler.removeCallbacks(castJoinTimeout)
         castLink = CastLink.FOREIGN
+        foreignUnknown = unknown
         handler.removeCallbacks(progressSaver)
-        castBanner.text = "Le Chromecast lit un autre contenu.\nIl n'a pas été remplacé."
+        castBanner.text = if (unknown) {
+            "Le Chromecast ne répond pas encore.\nRien ne lui a été envoyé."
+        } else {
+            "Le Chromecast lit un autre contenu.\nIl n'a pas été remplacé."
+        }
         castBanner.setBackgroundColor(0xCC333333.toInt())
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) askReplaceForeign()
     }
@@ -498,9 +515,12 @@ class PlayerActivity : FragmentActivity() {
         dismissForeignDialog()
         val title = items.getOrNull(resumeIndex)?.title.orEmpty()
         foreignDialog = android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Le Chromecast lit autre chose")
-            .setMessage("Remplacer ce qu'il lit par « $title » ?")
-            .setPositiveButton("Remplacer") { _, _ -> if (castLink == CastLink.FOREIGN) loadOnCast(resumeIndex, resumePosition) }
+            .setTitle(if (foreignUnknown) "État du Chromecast inconnu" else "Le Chromecast lit autre chose")
+            .setMessage(
+                if (foreignUnknown) "Il lit peut-être autre chose. Y envoyer « $title » ?"
+                else "Remplacer ce qu'il lit par « $title » ?",
+            )
+            .setPositiveButton(if (foreignUnknown) "Envoyer" else "Remplacer") { _, _ -> if (castLink == CastLink.FOREIGN) loadOnCast(resumeIndex, resumePosition) }
             .setNegativeButton("Laisser la TV", null)
             .create()
             .apply {
@@ -552,12 +572,24 @@ class PlayerActivity : FragmentActivity() {
     // ---------- Lecteur ----------
 
     private fun initializePlayer() {
+        // Serveur en HTTPS : aucune requête ne doit repartir en HTTP (redirection, segments
+        // HLS en http://…), les URL contenant les identifiants. Serveur en HTTP : tout est
+        // déjà en clair, les redirections vers HTTPS restent permises.
+        val httpsOnly = items.firstOrNull()?.url?.startsWith("https://", ignoreCase = true) == true
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(XtreamClient.USER_AGENT)
-            .setAllowCrossProtocolRedirects(true)
+            .setAllowCrossProtocolRedirects(!httpsOnly)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(30_000)
-        val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
+        val guarded = if (httpsOnly) {
+            ResolvingDataSource.Factory(httpFactory) { spec ->
+                if (spec.uri.scheme.equals("http", ignoreCase = true)) throw HttpsDowngradeException()
+                spec
+            }
+        } else {
+            httpFactory
+        }
+        val dataSourceFactory = DefaultDataSource.Factory(this, guarded)
         val extractors = DefaultExtractorsFactory()
             .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES)
             .setConstantBitrateSeekingEnabled(true)
@@ -808,7 +840,7 @@ class PlayerActivity : FragmentActivity() {
 
     /** Message d'erreur affiché tant que l'utilisateur n'a pas choisi « Réessayer » ou « Retour ». */
     private fun showError(error: PlaybackException) {
-        val reason = when (error.errorCode) {
+        val reason = if (isHttpsDowngrade(error)) XtreamClient.HTTPS_DOWNGRADE_MESSAGE else when (error.errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Connexion au serveur impossible. Vérifiez votre réseau."
             PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Le serveur refuse ce flux (abonnement, nombre de connexions ou flux hors ligne)."
@@ -823,6 +855,13 @@ class PlayerActivity : FragmentActivity() {
         errorPanel.visibility = View.VISIBLE
         errorPanel.getChildAt(1)?.let { (it as? ViewGroup)?.getChildAt(0)?.requestFocus() }
     }
+
+    /** Redirection vers HTTP refusée (par nous, ou par Android qui ne la suit pas : réponse 3xx). */
+    private fun isHttpsDowngrade(error: PlaybackException): Boolean =
+        generateSequence(error.cause) { it.cause }.any {
+            it is HttpsDowngradeException ||
+                (it is HttpDataSource.InvalidResponseCodeException && it.responseCode in 300..399)
+        }
 
     private fun hideError() {
         if (::errorPanel.isInitialized) errorPanel.visibility = View.GONE

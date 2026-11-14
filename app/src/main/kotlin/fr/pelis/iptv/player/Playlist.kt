@@ -95,6 +95,25 @@ object PlaylistHolder {
     }
 
     /**
+     * Profil supprimé : sa dernière session (dont les URL contiennent ses identifiants) est
+     * oubliée, en mémoire et sur l'appareil. Celle d'un autre profil est conservée. Passe par
+     * le même fil d'écriture que [persist] : une écriture en attente ne peut pas la recréer.
+     */
+    fun forgetProfile(context: Context, profileId: String) {
+        if (current?.profileId == profileId) current = null
+        val dir = context.noBackupFilesDir
+        writer.execute {
+            val file = File(dir, FILE_NAME)
+            if (!file.exists()) return@execute
+            val stored = runCatching {
+                json.decodeFromString<PlaySession>(SecretBox.decrypt(file.readText()))
+            }.getOrNull()
+            // Illisible : rien à préserver.
+            if (stored == null || stored.profileId == profileId) file.delete()
+        }
+    }
+
+    /**
      * Session en mémoire, ou relue depuis l'appareil après l'arrêt du processus.
      * Lecture de fichier et déchiffrement : à appeler hors du thread principal.
      */

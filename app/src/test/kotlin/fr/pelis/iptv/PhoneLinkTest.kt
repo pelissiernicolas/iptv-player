@@ -26,7 +26,8 @@ class PhoneLinkTest {
         override fun onFinished() { finished = true }
     }
 
-    private fun post(path: String, body: String) = PhoneLinkServer.Request("POST", path, emptyMap(), body)
+    private fun post(path: String, body: String, c: String? = code) =
+        PhoneLinkServer.Request("POST", path, if (c == null) emptyMap() else mapOf("c" to c), body)
     private fun get(path: String, c: String?) =
         PhoneLinkServer.Request("GET", path, if (c == null) emptyMap() else mapOf("c" to c), "")
 
@@ -49,7 +50,7 @@ class PhoneLinkTest {
         val server = PhoneLinkServer(PhoneLinkServer.Mode.LOGIN, FakeHandler(), code)
         assertEquals(403, server.handle(get("/", null)).status)
         assertEquals(403, server.handle(get("/", "mauvais")).status)
-        assertEquals(403, server.handle(post("/api/login", """{"c":"mauvais","password":"x"}""")).status)
+        assertEquals(403, server.handle(post("/api/login", """{"password":"x"}""", "mauvais")).status)
         val page = server.handle(get("/", code))
         assertEquals(200, page.status)
         assertTrue(page.body.decodeToString().contains("'$code'"))
@@ -78,6 +79,25 @@ class PhoneLinkTest {
         assertEquals(200, r.status)
         assertTrue(r.extraHeaders.any { it.first == "Content-Disposition" && it.second.contains("s.json") })
         assertEquals(404, server.handle(post("/api/login", """{"c":"$code"}""")).status)
+        // Le code ne sert qu'une fois, téléchargement compris.
+        assertEquals(410, server.handle(get("/api/export", code)).status)
+    }
+
+    @Test
+    fun headersAreReadBeforeTheBody() {
+        // Taille annoncée lue sans allouer ni lire le contenu (vérification du code d'abord).
+        val input = "POST /api/backup?c=x HTTP/1.1\r\nContent-Length: 9000000\r\n\r\nABC".byteInputStream()
+        val head = PhoneLinkServer.readHead(input)!!
+        assertEquals(9_000_000, head.contentLength)
+        assertEquals("x", head.query["c"])
+        assertEquals(3, input.available())
+        assertNull(PhoneLinkServer.readHead("POST / HTTP/1.1\r\nContent-Length: abc\r\n\r\n".byteInputStream()))
+        assertNull(
+            PhoneLinkServer.readRequest(
+                "POST / HTTP/1.1\r\nContent-Length: 20000\r\n\r\n".byteInputStream(),
+                PhoneLinkServer.MAX_SMALL_BODY,
+            ),
+        )
     }
 
     @Test

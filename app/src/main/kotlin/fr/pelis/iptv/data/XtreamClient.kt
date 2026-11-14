@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromStream
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -218,26 +219,35 @@ class XtreamClient(val credentials: Credentials) {
         }?.build() ?: throw XtreamException("Adresse du serveur invalide")
 
         val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
-        // Annulable : la requête est interrompue si l'écran n'en a plus besoin.
-        val body = try {
+        // Annulable : la requête est interrompue si l'écran n'en a plus besoin. La réponse est
+        // analysée au fil de la lecture (hors du thread principal), sans copie intégrale en
+        // texte, et coupée au-delà de [maxResponseBytes] : une réponse démesurée ne peut pas
+        // épuiser la mémoire de l'appareil.
+        return try {
             http.newCall(request).await { resp ->
                 when {
                     resp.code == 401 || resp.code == 403 ->
                         throw XtreamException("Accès refusé par le serveur (HTTP ${resp.code})")
                     !resp.isSuccessful -> throw XtreamException("Erreur serveur (HTTP ${resp.code})")
                 }
-                resp.body?.string().orEmpty()
+                val stream = resp.body?.byteStream() ?: return@await JsonArray(emptyList())
+                parseBounded(stream, maxResponseBytes)
             }
+        } catch (e: XtreamException) {
+            throw e
+        } catch (e: HttpsDowngradeException) {
+            throw XtreamException(e.message ?: HTTPS_DOWNGRADE_MESSAGE)
+        } catch (e: ResponseTooLargeException) {
+            throw XtreamException(
+                "Réponse du serveur trop volumineuse pour cet appareil " +
+                    "(plus de ${maxResponseBytes / (1024 * 1024)} Mo).",
+            )
         } catch (e: IOException) {
             throw XtreamException("Connexion impossible : ${e.message ?: e.javaClass.simpleName}")
-        }
-        if (body.isBlank()) return JsonArray(emptyList())
-        return withContext(Dispatchers.Default) {
-            try {
-                json.parseToJsonElement(body)
-            } catch (e: Exception) {
-                throw XtreamException("Réponse invalide du serveur")
-            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw XtreamException("Réponse invalide du serveur")
         }
     }
 
@@ -266,7 +276,55 @@ class XtreamClient(val credentials: Credentials) {
             .readTimeout(90, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
+            // Une adresse saisie en HTTPS ne doit jamais être redirigée vers HTTP : les
+            // identifiants (dans l'URL) partiraient en clair. HTTP -> HTTPS reste permis.
+            .addNetworkInterceptor { chain ->
+                val request = chain.request()
+                val response = chain.proceed(request)
+                if (response.isRedirect && isDowngrade(request.url, response.header("Location"))) {
+                    response.close()
+                    throw HttpsDowngradeException()
+                }
+                response
+            }
             .build()
+
+        const val HTTPS_DOWNGRADE_MESSAGE =
+            "Le serveur redirige vers une adresse non chiffrée (http). Par sécurité, la connexion " +
+                "est refusée. Si votre fournisseur ne propose que HTTP, saisissez son adresse en http://."
+
+        /** true si la redirection [location] fait passer [from] (HTTPS) en HTTP. */
+        fun isDowngrade(from: okhttp3.HttpUrl, location: String?): Boolean {
+            if (!from.isHttps || location == null) return false
+            val target = from.resolve(location) ?: return false
+            return !target.isHttps
+        }
+
+        /**
+         * Taille maximale d'une réponse de l'API, selon la mémoire de l'appareil : l'arbre JSON
+         * occupe plusieurs fois la taille du texte reçu.
+         */
+        val maxResponseBytes: Long by lazy {
+            (Runtime.getRuntime().maxMemory() / 8).coerceIn(16L * 1024 * 1024, 64L * 1024 * 1024)
+        }
+
+        /**
+         * Analyse JSON en flux, limitée à [limit] octets (décompressés). Réponse vide -> liste vide.
+         */
+        @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+        fun parseBounded(raw: java.io.InputStream, limit: Long): JsonElement {
+            val input = java.io.BufferedInputStream(LimitedInputStream(raw, limit))
+            while (true) {
+                input.mark(1)
+                val b = input.read()
+                if (b < 0) return JsonArray(emptyList())
+                if (!Character.isWhitespace(b)) {
+                    input.reset()
+                    break
+                }
+            }
+            return json.decodeFromStream(JsonElement.serializer(), input)
+        }
 
         /** true si l'adresse n'est pas chiffrée (identifiants et flux lisibles sur le réseau). */
         fun isCleartext(server: String) = server.trim().startsWith("http://", ignoreCase = true)
@@ -306,9 +364,38 @@ class XtreamClient(val credentials: Credentials) {
                 // tirets), jamais de « : » d'autorité qui pourrait être un mot de passe.
                 return if (PARTIAL_HOST.matches(t)) t else ""
             }
-            val safe = url.newBuilder().username("").password("").query(null).fragment(null).build().toString()
-            val cleaned = if (url.encodedPath == "/" && !t.trimEnd().endsWith("/")) safe.trimEnd('/') else safe
+            // Adresse de lecture collée (« …/live/utilisateur/motdepasse/123.ts ») : le chemin
+            // contient les identifiants, on ne garde que ce qui précède.
+            val streamAt = url.pathSegments.indexOfFirst { it.lowercase() in STREAM_PATHS }
+            val builder = url.newBuilder().username("").password("").query(null).fragment(null)
+            if (streamAt >= 0) {
+                builder.encodedPath("/")
+                url.pathSegments.take(streamAt).filter { it.isNotEmpty() }.forEach { builder.addPathSegment(it) }
+            }
+            val safe = builder.build().toString()
+            val cleaned = if ((streamAt >= 0 || url.encodedPath == "/") && !t.trimEnd().endsWith("/")) {
+                safe.trimEnd('/')
+            } else {
+                safe
+            }
             return if (hasScheme) cleaned else cleaned.removePrefix("http://")
+        }
+
+        private val STREAM_PATHS = setOf("live", "movie", "series")
+
+        /** Adresse de lecture Xtream : …/live|movie|series/utilisateur/motdepasse/123.ext */
+        private fun parseStreamUrl(url: okhttp3.HttpUrl): Credentials? {
+            val segments = url.pathSegments
+            val at = segments.indexOfFirst { it.lowercase() in STREAM_PATHS }
+            if (at < 0 || segments.size < at + 4) return null
+            val user = segments[at + 1]
+            val pass = segments[at + 2]
+            if (user.isBlank() || pass.isEmpty()) return null
+            val server = url.newBuilder().username("").password("").query(null).fragment(null)
+                .encodedPath("/")
+                .apply { segments.take(at).filter { it.isNotEmpty() }.forEach { addPathSegment(it) } }
+                .build().toString().trimEnd('/')
+            return Credentials(server, user, pass)
         }
 
         /**
@@ -317,6 +404,7 @@ class XtreamClient(val credentials: Credentials) {
          */
         fun parseM3uLink(input: String): Credentials? {
             val url = input.trim().toHttpUrlOrNull() ?: return null
+            parseStreamUrl(url)?.let { return it }
             val user = url.queryParameter("username") ?: url.username.takeIf { it.isNotEmpty() }
             val pass = url.queryParameter("password") ?: url.password.takeIf { it.isNotEmpty() }
             if (user.isNullOrBlank() || pass.isNullOrEmpty()) return null
@@ -337,6 +425,33 @@ class XtreamClient(val credentials: Credentials) {
         }
     }
 }
+
+/** Réponse plus grande que la limite autorisée. */
+class ResponseTooLargeException : IOException("Réponse trop volumineuse")
+
+/** Flux qui échoue dès que plus de [limit] octets ont été lus. */
+internal class LimitedInputStream(input: java.io.InputStream, private val limit: Long) :
+    java.io.FilterInputStream(input) {
+    private var count = 0L
+
+    private fun add(n: Long) {
+        if (n > 0) {
+            count += n
+            if (count > limit) throw ResponseTooLargeException()
+        }
+    }
+
+    override fun read(): Int = super.read().also { if (it >= 0) add(1) }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int = super.read(b, off, len).also { add(it.toLong()) }
+
+    override fun skip(n: Long): Long = super.skip(n).also { add(it) }
+
+    override fun markSupported() = false
+}
+
+/** Redirection HTTPS -> HTTP refusée. */
+class HttpsDowngradeException : IOException(XtreamClient.HTTPS_DOWNGRADE_MESSAGE)
 
 /** Les textes EPG Xtream sont encodés en Base64 (pas toujours) : on décode si c'est valide. */
 private fun decodeText(raw: String?): String? {

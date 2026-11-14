@@ -18,6 +18,7 @@ import fr.pelis.iptv.data.Backup
 import fr.pelis.iptv.transfer.PhoneLinkServer
 import fr.pelis.iptv.data.Library
 import fr.pelis.iptv.data.MovieDetail
+import fr.pelis.iptv.data.RecentChannel
 import fr.pelis.iptv.data.WatchProgress
 import fr.pelis.iptv.data.MediaEntry
 import fr.pelis.iptv.data.SeriesDetail
@@ -321,13 +322,43 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 store.setFavorites(owner, type, merged)
             }
         }
-        Library.importData(owner, backup.progress, backup.recentChannels)
+        Library.importData(owner, withCatalogImages(backup.progress), withCatalogImages(backup.recentChannels))
         // Les listes affichées sont recalculées (catégorie Favoris) ; le catalogue en cache reste.
         loadJobs.values.forEach { it.cancel() }
         loadJobs.clear()
         tabStates.clear()
         if (!homeSelected) selectTab(currentTab)
         return addedFavorites
+    }
+
+    /** Images des éléments importés (absentes des sauvegardes), retrouvées dans le catalogue en mémoire. */
+    private fun catalogImages(type: ContentType): Map<String, String> {
+        val lists = listOfNotNull(allCache[type]) +
+            categoryCache.entries().filter { it.first.first == type }.map { it.second }
+        val images = HashMap<String, String>()
+        lists.forEach { list -> list.forEach { e -> e.image?.let { images.putIfAbsent(e.id, it) } } }
+        return images
+    }
+
+    @JvmName("progressWithImages")
+    private fun withCatalogImages(list: List<WatchProgress>): List<WatchProgress> {
+        if (list.isEmpty()) return list
+        val vod = catalogImages(ContentType.VOD)
+        val series = catalogImages(ContentType.SERIES)
+        return list.map { p ->
+            val image = when (p.kind) {
+                "vod" -> vod[p.contentId]
+                else -> p.seriesId?.let { series[it] }
+            }
+            if (p.image == null && image != null) p.copy(image = image) else p
+        }
+    }
+
+    @JvmName("recentWithImages")
+    private fun withCatalogImages(list: List<RecentChannel>): List<RecentChannel> {
+        if (list.isEmpty()) return list
+        val live = catalogImages(ContentType.LIVE)
+        return list.map { c -> if (c.image == null) live[c.id]?.let { c.copy(image = it) } ?: c else c }
     }
 
     // ---------- Configuration depuis un téléphone (QR code) ----------
@@ -506,6 +537,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistProfiles {
             store.deleteProfileData(profile.id)
             Library.deleteProfileData(profile.id)
+            PlaylistHolder.forgetProfile(getApplication(), profile.id)
         }
         if (profiles.isEmpty()) screen = Screen.EditProfile(null)
     }
@@ -799,11 +831,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     suspend fun loadEpg(entry: MediaEntry) {
         if (entry.type != ContentType.LIVE) return
-        // Sans identifiant EPG, les serveurs Xtream ne renvoient pas de programme pour la chaîne.
-        if (entry.epgId.isNullOrBlank()) {
-            if (epg[entry.id] == null) epg[entry.id] = emptyList()
-            return
-        }
+        // La requête utilise l'identifiant du flux : on essaie même sans epg_channel_id (certains
+        // panneaux renvoient quand même le guide). Sans résultat, nouvel essai bien plus tard.
+        val withoutEpgId = entry.epgId.isNullOrBlank()
         while (true) {
             val c = client ?: return
             val wait = epgFetchedAt[entry.id]?.let { it - System.currentTimeMillis() } ?: 0L
@@ -815,8 +845,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 epgFailed.remove(entry.id)
                 // Prochain rafraîchissement : fin du programme en cours (au plus tard dans 20 min).
                 val now = System.currentTimeMillis()
-                val end = programs.firstOrNull { it.end > now }?.end ?: (now + EPG_TTL_MS)
-                (end + 5_000L).coerceIn(now + 60_000L, now + EPG_TTL_MS)
+                if (programs.isEmpty() && withoutEpgId) {
+                    now + EPG_ABSENT_TTL_MS
+                } else {
+                    val end = programs.firstOrNull { it.end > now }?.end ?: (now + EPG_TTL_MS)
+                    (end + 5_000L).coerceIn(now + 60_000L, now + EPG_TTL_MS)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -984,6 +1018,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val EPG_TTL_MS = 20 * 60_000L
+        /** Chaîne sans epg_channel_id dont le guide est vide : nouvel essai bien plus tard. */
+        const val EPG_ABSENT_TTL_MS = 2 * 60 * 60_000L
         const val CATALOG_TTL_MS = 30 * 60_000L
         const val EPG_RETRY_MS = 2 * 60_000L
     }
@@ -1009,6 +1045,12 @@ private class TimedCache<K, V>(private val max: Int, private val ttlMs: Long) {
     }
 
     fun clear() = map.clear()
+
+    /** Entrées encore valides. */
+    fun entries(): List<Pair<K, V>> {
+        val now = System.currentTimeMillis()
+        return map.entries.filter { now - it.value.first <= ttlMs }.map { it.key to it.value.second }
+    }
 }
 
 /** Lit au plus [limit] octets (InputStream.readNBytes n'existe qu'à partir d'Android 13). */

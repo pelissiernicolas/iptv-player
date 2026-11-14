@@ -96,7 +96,7 @@ async function send(path, data, form) {
   button.disabled = true;
   show(true, 'Envoi en cours…');
   try {
-    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const r = await fetch(path + '?c=' + encodeURIComponent(CODE), { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ c: CODE }, data)) });
     let reply;
     try { reply = await r.json(); } catch (_) { reply = { ok: false, message: await r.text() }; }

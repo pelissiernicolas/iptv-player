@@ -24,7 +24,9 @@ class BackupTest {
             progress = listOf(vod("10", 5)),
             recentChannels = listOf(RecentChannel("1", "TF1", "https://img/1.png")),
         )
-        assertEquals(backup, Backup.decode(Backup.encode(backup)))
+        // Tout est conservé, sauf l'adresse des images (retrouvée dans le catalogue à l'import).
+        val expected = backup.copy(recentChannels = listOf(RecentChannel("1", "TF1", null)))
+        assertEquals(expected, Backup.decode(Backup.encode(backup)))
     }
 
     @Test

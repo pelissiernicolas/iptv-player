@@ -41,6 +41,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -65,6 +68,7 @@ fun PhoneLinkScreen(vm: MainViewModel, mode: PhoneLinkServer.Mode) {
     var expired by remember { mutableStateOf(false) }
     var noNetwork by remember { mutableStateOf(false) }
 
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(mode, generation) {
         val server = PhoneLinkServer(
             mode,
@@ -94,7 +98,19 @@ fun PhoneLinkScreen(vm: MainViewModel, mode: PhoneLinkServer.Mode) {
         noNetwork = url == null
         expired = false
         finished = false
-        onDispose { server.stop() }
+        // L'appli passe en arrière-plan (écran d'accueil, autre appli, veille) : le serveur
+        // est fermé tout de suite, sans attendre l'expiration ; un nouveau code sera demandé.
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                server.stop()
+                if (!finished) expired = true
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            server.stop()
+        }
     }
     LaunchedEffect(generation) {
         delay(PhoneLinkServer.LIFETIME_MS)
@@ -156,8 +172,10 @@ fun PhoneLinkScreen(vm: MainViewModel, mode: PhoneLinkServer.Mode) {
                     Text(it, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                 }
                 Text(
-                    "Les données passent directement du téléphone à cet appareil par votre réseau, " +
-                        "sans Internet. Le code ne sert qu'une fois et expire après 10 minutes.",
+                    "Les données passent directement du téléphone à cet appareil par votre réseau local, " +
+                        "sans Internet, mais sans chiffrement (HTTP) : à utiliser uniquement sur un Wi-Fi " +
+                        "de confiance. Le code ne sert qu'une fois et expire après 10 minutes ou dès que " +
+                        "vous quittez cet écran.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 )

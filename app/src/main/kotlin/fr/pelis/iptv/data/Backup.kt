@@ -7,8 +7,10 @@ import kotlinx.serialization.json.Json
 
 /**
  * Sauvegarde des données personnelles d'un profil : favoris, progression de visionnage et
- * chaînes récentes. Jamais d'identifiants (serveur, utilisateur, mot de passe) : le fichier
- * peut être partagé ou stocké n'importe où.
+ * chaînes récentes. Jamais d'identifiants (serveur, utilisateur, mot de passe), ni d'adresse
+ * d'image (celles d'un fournisseur peuvent contenir un jeton ou un mot de passe) : les images
+ * sont retrouvées dans le catalogue après l'import. Le fichier reste une donnée personnelle
+ * (ce que l'on regarde) : à conserver dans un endroit privé.
  *
  * Les identifiants de contenu sont ceux du fournisseur : l'import n'a de sens qu'avec le même
  * fournisseur. Les éléments inconnus restent simplement sans effet.
@@ -46,11 +48,10 @@ data class Backup(
         private const val MAX_FAVORITES = 5_000
         private const val MAX_ID = 64
         private const val MAX_TEXT = 300
-        private const val MAX_URL = 2_048
 
         private val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
 
-        fun encode(backup: Backup): String = json.encodeToString(backup)
+        fun encode(backup: Backup): String = json.encodeToString(backup.withoutImages())
 
         /** Lit et assainit une sauvegarde ; lève [IllegalArgumentException] si ce n'en est pas une. */
         fun decode(text: String): Backup {
@@ -63,11 +64,15 @@ data class Backup(
 
         private fun id(s: String?) = s?.trim()?.takeIf { it.isNotEmpty() && it.length <= MAX_ID }
         private fun text(s: String?) = s?.take(MAX_TEXT)
-        private fun url(s: String?) =
-            s?.takeIf { it.length <= MAX_URL && (it.startsWith("http://") || it.startsWith("https://")) }
 
         private fun ids(list: List<String>) = list.mapNotNull(::id).distinct().take(MAX_FAVORITES)
     }
+
+    /** Les adresses d'images ne sortent jamais de l'appareil. */
+    private fun withoutImages() = copy(
+        progress = progress.map { it.copy(image = null) },
+        recentChannels = recentChannels.map { it.copy(image = null) },
+    )
 
     /** Écarte les entrées invalides et borne les textes : le fichier vient de l'extérieur. */
     private fun sanitized() = copy(
@@ -86,13 +91,13 @@ data class Backup(
                 extension = p.extension?.takeIf { it.length <= 8 && it.all(Char::isLetterOrDigit) },
                 title = text(p.title).orEmpty(),
                 subtitle = text(p.subtitle),
-                image = url(p.image),
+                image = null,
                 seriesId = id(p.seriesId),
             )
         }.distinctBy { it.key },
         recentChannels = recentChannels.mapNotNull { c ->
             val channelId = id(c.id) ?: return@mapNotNull null
-            c.copy(id = channelId, name = text(c.name).orEmpty(), image = url(c.image), epgId = text(c.epgId))
+            c.copy(id = channelId, name = text(c.name).orEmpty(), image = null, epgId = text(c.epgId))
         }.distinctBy { it.id },
     )
 }
