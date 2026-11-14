@@ -1,0 +1,138 @@
+name: CI Windows
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/windows.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            mpv: x86_64
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            mpv: aarch64
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: desktop
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('desktop/Cargo.lock') }}
+
+      - name: Tests
+        run: cargo test --locked --target ${{ matrix.target }}
+
+      - name: Compilation release
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: libmpv (builds publiques mpv-winbuild-cmake)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = gh release view --repo shinchiro/mpv-winbuild-cmake --json assets --jq '.assets[].name'
+          $name = $assets | Where-Object { $_ -match '^mpv-dev-${{ matrix.mpv }}-\d+-git-[0-9a-f]+\.7z$' } | Select-Object -First 1
+          if (-not $name) { throw "Archive libmpv ${{ matrix.mpv }} introuvable" }
+          gh release download --repo shinchiro/mpv-winbuild-cmake --pattern $name --dir mpv
+          7z x "mpv/$name" -ompv/extract -y | Out-Null
+          Copy-Item mpv/extract/libmpv-2.dll target/${{ matrix.target }}/release/
+
+      - name: Archive
+        id: package
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          $zip = "IPTV-Player-$version-windows-${{ matrix.arch }}.zip"
+          $out = "target/package"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/iptv-player.exe, target/${{ matrix.target }}/release/libmpv-2.dll $out
+          Compress-Archive -Path "$out/*" -DestinationPath $zip -Force
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: IPTV-Player-windows-${{ matrix.arch }}
+          path: desktop/${{ steps.package.outputs.zip }}
+          if-no-files-found: error
+
+  publish:
+    name: Publier sur la release GitHub
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: IPTV-Player-windows-*
+          path: release
+          merge-multiple: true
+
+      - name: Joindre les archives à la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          CARGO_VERSION=$(sed -n 's/^version *= *"\(.*\)"/\1/p' desktop/Cargo.toml | head -n1)
+          # La version Windows suit sa propre numérotation : on ne publie que si le tag la vise.
+          if [ "$CARGO_VERSION" != "$VERSION" ]; then
+            echo "Tag $TAG ≠ version Windows $CARGO_VERSION : rien à publier."
+            exit 0
+          fi
+          # La release peut être créée par la CI Android en parallèle : on l'attend, sinon on la crée.
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" >/dev/null 2>&1; then break; fi
+            if [ "$i" = 30 ]; then
+              NOTES="release-notes/${VERSION}.md"
+              if [ -f "$NOTES" ]; then
+                gh release create "$TAG" --title "IPTV Player ${VERSION} – $(head -n1 "$NOTES" | sed 's/^# *//')" --notes "$(tail -n +2 "$NOTES")"
+              else
+                gh release create "$TAG" --title "IPTV Player ${VERSION}" --generate-notes
+              fi
+            fi
+            sleep 30
+          done
+          gh release upload "$TAG" release/*.zip --clobber
