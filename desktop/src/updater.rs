@@ -39,9 +39,15 @@ fn client() -> reqwest::Client {
 
 /// Dernière version publiée si elle est plus récente et contient une archive Windows pour
 /// cette architecture ; `None` sinon.
+/// Préfixe des tags de la version Windows (les tags `v…` sont ceux de l'Android).
+pub const TAG_PREFIX: &str = "windows-v";
+
+/// Dernière version Windows publiée si elle est plus récente et contient une archive pour
+/// cette architecture ; `None` sinon. Les releases Windows sont distinctes de celles
+/// d'Android (tags `windows-v…`), on parcourt donc les releases récentes.
 pub async fn check_latest() -> Result<Option<UpdateInfo>, String> {
     let resp = client()
-        .get(format!("https://api.github.com/repos/{REPO}/releases/latest"))
+        .get(format!("https://api.github.com/repos/{REPO}/releases?per_page=30"))
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
@@ -50,29 +56,44 @@ pub async fn check_latest() -> Result<Option<UpdateInfo>, String> {
         return Err(format!("GitHub a répondu HTTP {}", resp.status().as_u16()));
     }
     let root: Value = resp.json_value().await?;
-    let Some(version) = s(root.get("tag_name")).map(|t| t.trim_start_matches(['v', 'V']).to_string()) else {
-        return Ok(None);
-    };
-    if !is_newer(&version, CURRENT_VERSION) {
-        return Ok(None);
+    Ok(root.as_array().and_then(|releases| pick_update(releases, CURRENT_VERSION)))
+}
+
+/// Parmi les releases GitHub, la plus récente version Windows publiée (ni brouillon ni
+/// préversion), si elle est plus récente que `current` et propose l'archive de cette architecture.
+pub fn pick_update(releases: &[Value], current: &str) -> Option<UpdateInfo> {
+    let (version, release) = releases
+        .iter()
+        .filter(|r| r.get("draft") != Some(&Value::Bool(true)) && r.get("prerelease") != Some(&Value::Bool(true)))
+        .filter_map(|r| {
+            let tag = s(r.get("tag_name"))?;
+            let version = tag.strip_prefix(TAG_PREFIX)?.to_string();
+            Some((version, r))
+        })
+        .fold(None::<(String, &Value)>, |best, (v, r)| match best {
+            Some((bv, br)) if !is_newer(&v, &bv) => Some((bv, br)),
+            _ => Some((v, r)),
+        })?;
+    if !is_newer(&version, current) {
+        return None;
     }
     let wanted = asset_name(&version);
-    let asset = root
+    let asset = release
         .get("assets")
-        .and_then(Value::as_array)
-        .and_then(|a| a.iter().find(|x| s(x.get("name")).is_some_and(|n| n.eq_ignore_ascii_case(&wanted))));
-    let Some(asset) = asset else { return Ok(None) };
-    let Some(url) = s(asset.get("browser_download_url")) else { return Ok(None) };
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|x| s(x.get("name")).is_some_and(|n| n.eq_ignore_ascii_case(&wanted)))?;
+    let url = s(asset.get("browser_download_url"))?;
     // Uniquement depuis GitHub : l'adresse vient d'une réponse réseau.
     if !url.starts_with(&format!("https://github.com/{REPO}/releases/download/")) {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(UpdateInfo {
-        notes: clean_notes(&s(root.get("body")).unwrap_or_default()),
+    Some(UpdateInfo {
+        notes: clean_notes(&s(release.get("body")).unwrap_or_default()),
         size: s(asset.get("size")).and_then(|v| v.parse().ok()).unwrap_or(-1),
         version,
         url,
-    }))
+    })
 }
 
 trait JsonValue {
@@ -241,6 +262,31 @@ mod tests {
         assert!(is_newer("1.4.0", "1.4.0-beta"));
         assert!(is_newer("2.0", "1.99.99"));
         assert!(!is_newer("1.5.0", "1.5.1"));
+    }
+
+    #[test]
+    fn picks_windows_release_only() {
+        let dl = format!("https://github.com/{REPO}/releases/download");
+        let release = |tag: &str, version: &str, draft: bool| {
+            serde_json::json!({
+                "tag_name": tag, "draft": draft, "prerelease": false, "body": "## Nouveau
+- **Mieux**",
+                "assets": [{ "name": asset_name(version), "size": 10, "browser_download_url": format!("{dl}/{tag}/{}", asset_name(version)) }]
+            })
+        };
+        let releases = vec![
+            release("v1.9.0", "1.9.0", false),          // Android : ignorée
+            release("windows-v1.7.0", "1.7.0", true),   // brouillon : ignorée
+            release("windows-v1.5.2", "1.5.2", false),
+            release("windows-v1.6.0", "1.6.0", false),
+        ];
+        let u = pick_update(&releases, "1.5.0").unwrap();
+        assert_eq!(u.version, "1.6.0");
+        assert_eq!(u.notes, "Nouveau
+• Mieux");
+        assert!(pick_update(&releases, "1.6.0").is_none());
+        let foreign = vec![serde_json::json!({ "tag_name": "windows-v2.0.0", "assets": [{ "name": asset_name("2.0.0"), "browser_download_url": "https://evil.example/x.zip" }] })];
+        assert!(pick_update(&foreign, "1.5.0").is_none());
     }
 
     #[test]
