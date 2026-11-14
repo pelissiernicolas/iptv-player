@@ -175,7 +175,7 @@ pub fn card(ui: &mut Ui, size: Vec2) -> (Rect, Response) {
 
 /// 75 000 ms -> "1:15", 3 900 000 ms -> "1:05:00".
 pub fn format_duration(ms: i64) -> String {
-    let total = (ms.max(0) / 1000);
+    let total = ms.max(0) / 1000;
     let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
     if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
 }

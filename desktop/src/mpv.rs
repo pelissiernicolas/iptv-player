@@ -200,6 +200,10 @@ impl Mpv {
             ("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=4"),
             ("audio-client-name", "IPTV Player"),
             ("alang", "fr,fre,fra,fr-FR"),
+            // Sous-titres désactivés par défaut (comme sur Android) : les flux issus de la TNT ou
+            // du satellite portent souvent une piste télétexte / DVB que mpv activerait d'office,
+            // affichée comme un bloc noir opaque au milieu de l'image. Activables par le menu 💬.
+            ("sid", "no"),
             ("sub-ass-override", "yes"),
             ("osd-level", "0"),
         ];
