@@ -20,3 +20,7 @@ build/
 *.keystore
 *.jks
 keystore.properties
+
+# Version Windows (Rust)
+desktop/target/
+desktop/third_party/

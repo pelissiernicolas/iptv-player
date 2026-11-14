@@ -2,6 +2,8 @@
 
 Lecteur IPTV pour Android (téléphone, tablette et Android TV) compatible avec l'API **Xtream Codes**.
 
+Une version **Windows** (PC et PC tactile, réécrite en Rust) est dans [`desktop/`](desktop/README.md).
+
 > Cette application ne fournit aucun contenu : elle sert uniquement à lire un abonnement IPTV auquel vous avez légitimement accès.
 
 ## Fonctionnalités
